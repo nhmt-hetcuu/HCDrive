@@ -66,7 +66,9 @@ Environment:
 - `FRONTEND_URL`
 - `JWT_ACCESS_SECRET`
 - `TOKEN_ENCRYPTION_KEY`
-- `RECAPTCHA_SECRET_KEY` (optional; enables captcha verification when paired with frontend site key)
+- `RECAPTCHA_SECRET_KEY`, `RECAPTCHA_SITE_KEY` (optional fallback; captcha is normally set in Settings → Security, reCAPTCHA v2 or Cloudflare Turnstile)
+- `DISABLE_CAPTCHA` (`true` skips every captcha check, for an admin locked out by a wrong key)
+- `TRUST_PROXY` (optional; empty = detect Cloudflare and private-network proxies automatically, see `utils/client-ip.ts`)
 - `ACCESS_TOKEN_TTL_SECONDS`
 - `REFRESH_TOKEN_TTL_DAYS`
 - `MAX_UPLOAD_BYTES`
@@ -87,7 +89,7 @@ Backend conventions:
 - Keep Google-specific OAuth/Drive behavior in provider modules/services.
 - Keep public-token routes outside `requireAuth`; verify token hash, status, and expiry before streaming/returning data.
 - Google sign-in/register uses one-time auth handoff tokens; never send app access/refresh tokens through URL query params.
-- Email/password registration verifies reCAPTCHA only when `RECAPTCHA_SECRET_KEY` is configured.
+- Email/password sign-up (and sign-in, if the admin turns it on) verifies a captcha when one is set in Settings → Security (`utils/captcha.ts`). Captcha secrets are stored encrypted and never returned by the API.
 
 Security rules:
 - Never commit `.env` files or secrets.
@@ -148,7 +150,7 @@ Commands:
 
 Environment:
 - `VITE_API_URL`: backend base URL. Vite embeds this at build time.
-- `VITE_RECAPTCHA_SITE_KEY`: optional reCAPTCHA site key. Vite embeds this at build time; blank disables captcha UI.
+- `VITE_RECAPTCHA_SITE_KEY`: optional, only for an env-only reCAPTCHA setup; the site key normally comes from `GET /auth/config` at runtime.
 
 Frontend conventions:
 - Use `@/*` imports for files under `frontend/src`.
@@ -231,6 +233,12 @@ Invites:
 - `POST /invites`
 - `DELETE /invites/:id`
 
+Security settings (admin):
+- `GET /system/security/captcha`
+- `PUT /system/security/captcha` (new keys need `testToken` from a solved test captcha)
+- `GET /system/security/network` (detected Cloudflare / reverse proxy, client IP)
+- `PUT /system/security/network` (`mode`: `auto` or `off`)
+
 Library (links others shared with the user, e.g. bought courses):
 - `GET /library`
 - `POST /library` (`url`, or `fileId` + `accountId` from Shared with me)
@@ -239,6 +247,9 @@ Library (links others shared with the user, e.g. bought courses):
 - `POST /library/collections/rename`
 - `GET /library/:id/items?folderId=<id>`
 - `PUT /library/:id/progress`
+- `GET|POST|DELETE /library/:id/share` (internal share link `/library/s/<token>`; recipients open the course with their own Google access)
+- `GET /library/shared/:token`, `POST /library/shared/:token/save`
+- `GET|POST /library/:id/save-to-drive` (background copy of the course into the user's Drive; real copies, files the owner blocks from copying are skipped)
 - `GET /library/stream/:token` (signed, no auth header; only for files the owner allows downloading)
 
 Public shared files:

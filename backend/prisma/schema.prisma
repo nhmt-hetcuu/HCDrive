@@ -416,7 +416,12 @@ model SavedLink {
   ownerEmail         String?             @map("owner_email")
   /// Course or group name the user files it under ("" = not grouped).
   collection         String              @default("")
+  /// Teacher / lecturer of the course, typed by the user.
+  teacher            String              @default("")
   note               String              @default("")
+  /// Internal share link (/library/s/<token>): other HCDrive users add the course to their own library.
+  shareTokenHash     String?             @unique @map("share_token_hash")
+  shareTokenEncrypted String?            @map("share_token_encrypted")
   lastOpenedAt       DateTime?           @map("last_opened_at")
   createdAt          DateTime            @default(now()) @map("created_at")
   updatedAt          DateTime            @updatedAt @map("updated_at")

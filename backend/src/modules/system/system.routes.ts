@@ -10,10 +10,12 @@ import { decryptText, encryptText } from '../../utils/crypto.js'
 import { hashPassword } from '../../utils/password.js'
 import { getCustomConfig } from '../google/google.service.js'
 import Busboy from 'busboy'
+import { securityRouter } from './security.routes.js'
 
 export const systemRouter = Router()
 // Everything here changes global state (OAuth config, code, database), so it is admin-only.
 systemRouter.use(requireAuth, requireAdmin)
+systemRouter.use('/security', securityRouter)
 
 systemRouter.post('/update', (req, res, next) => {
   const projectRoot = path.resolve(process.cwd(), '..')

@@ -69,3 +69,25 @@ export function clearAuthSession() {
   localStorage.removeItem('9drive.refreshToken')
   localStorage.removeItem('9drive.user')
 }
+
+const RETURN_PATH_KEY = 'hcdrive.returnPath'
+
+/** Remembers where a signed-out visitor was going; read once after sign-in. Only same-site paths. */
+export function rememberReturnPath(path: string) {
+  try {
+    sessionStorage.setItem(RETURN_PATH_KEY, path)
+  } catch {
+    // storage unavailable: land on the default page
+  }
+}
+
+export function takeReturnPath(fallback: string) {
+  try {
+    const path = sessionStorage.getItem(RETURN_PATH_KEY)
+    sessionStorage.removeItem(RETURN_PATH_KEY)
+    if (path && path.startsWith('/') && !path.startsWith('//') && !path.startsWith('/login')) return path
+  } catch {
+    // ignore
+  }
+  return fallback
+}

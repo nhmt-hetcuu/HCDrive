@@ -12,7 +12,8 @@ import { hashPassword, verifyPassword } from '../../utils/password.js'
 import { encryptText, hashToken, randomToken } from '../../utils/crypto.js'
 import { signAccessToken } from '../../utils/jwt.js'
 import { createAuditLog } from '../../utils/audit.js'
-import { limiters } from '../../middleware/rate-limit.js'
+import { clientIp, limiters } from '../../middleware/rate-limit.js'
+import { publicCaptchaConfig, verifyCaptcha } from '../../utils/captcha.js'
 import { isRegistrationAllowed } from '../../utils/registration.js'
 import { GOOGLE_LINK_SCOPES, linkGoogleIdentity, parkGoogleLink, resolveGoogleLoginUser, takeGoogleLink } from '../../utils/google-identity.js'
 import { createOAuthClient, syncGoogleQuota, getRcloneConfig, getCustomConfig } from '../google/google.service.js'
@@ -28,7 +29,7 @@ function getAvatarsDir(): string {
 }
 
 const registerSchema = z.object({ name: z.string().min(2), email: z.string().email(), password: z.string().min(8), captchaToken: z.string().optional() })
-const loginSchema = z.object({ email: z.string().email(), password: z.string().min(1) })
+const loginSchema = z.object({ email: z.string().email(), password: z.string().min(1), captchaToken: z.string().max(4096).optional() })
 const refreshSchema = z.object({ refreshToken: z.string().min(1) })
 const googleExchangeSchema = z.object({ token: z.string().min(1) })
 
@@ -59,18 +60,11 @@ async function createSession(userId: string, req: AuthRequest) {
   return { accessToken: signAccessToken({ sub: userId, sid: session.id }), refreshToken }
 }
 
-async function verifyCaptcha(token: string | undefined) {
-  if (!env.RECAPTCHA_SECRET_KEY) return true
-  if (!token) return false
-  const form = new URLSearchParams({ secret: env.RECAPTCHA_SECRET_KEY, response: token })
-  const response = await fetch('https://www.google.com/recaptcha/api/siteverify', { method: 'POST', body: form })
-  const data = await response.json() as { success?: boolean }
-  return Boolean(data.success)
-}
 
 authRouter.get('/config', async (_req, res, next) => {
   try {
-    return res.json({ allowRegistration: await isRegistrationAllowed() })
+    const [allowRegistration, captcha] = await Promise.all([isRegistrationAllowed(), publicCaptchaConfig()])
+    return res.json({ allowRegistration, captcha })
   } catch (error) {
     return next(error)
   }
@@ -86,7 +80,7 @@ authRouter.post('/register', limiters.register, async (req, res, next) => {
     }
 
     const body = registerSchema.parse(req.body)
-    if (!(await verifyCaptcha(body.captchaToken))) return res.status(400).json({ code: 'CAPTCHA_FAILED', message: 'Captcha verification failed.' })
+    if (!(await verifyCaptcha('register', body.captchaToken, clientIp(req)))) return res.status(400).json({ code: 'CAPTCHA_FAILED', message: 'Xác minh captcha không thành công. Thử lại.' })
     const existing = await prisma.user.findUnique({ where: { email: body.email } })
     if (existing) return res.status(409).json({ code: 'AUTH_EMAIL_TAKEN', message: 'Email already registered.' })
     const user = await prisma.user.create({ data: { name: body.name, email: body.email, passwordHash: await hashPassword(body.password) } })
@@ -100,6 +94,7 @@ authRouter.post('/register', limiters.register, async (req, res, next) => {
 authRouter.post('/login', limiters.loginPerIp, limiters.loginPerAccount, async (req, res, next) => {
   try {
     const body = loginSchema.parse(req.body)
+    if (!(await verifyCaptcha('login', body.captchaToken, clientIp(req)))) return res.status(400).json({ code: 'CAPTCHA_FAILED', message: 'Xác minh captcha không thành công. Thử lại.' })
     const user = await prisma.user.findUnique({ where: { email: body.email } })
     if (!user || !(await verifyPassword(user.passwordHash, body.password))) return res.status(401).json({ code: 'AUTH_INVALID_CREDENTIALS', message: 'Invalid email or password.' })
     if (user.status !== 'active') {

@@ -23,13 +23,14 @@ import { Button } from '@/components/ui/button'
 import { DummyModal } from '@/components/drive/DummyModal'
 import { GoogleLogo } from '@/components/auth/GoogleLogo'
 import { apiFetch, formatAvatarUrl, formatDate, API_URL } from '@/lib/api'
+import { SecuritySettings } from '@/components/settings/SecuritySettings'
 import { getStoredUser, updateStoredUser, getAccessToken, clearAuthSession, type AuthUser } from '@/lib/auth'
 import { useLanguage } from '@/context/LanguageContext'
 import { useSnackbar } from '@/context/SnackbarContext'
 import { saveTheme, type Theme } from '@/lib/theme'
 import { cn } from '@/lib/utils'
 
-type SettingsTab = 'general' | 'profile' | 'google' | 'api' | 'users' | 'activity' | 'system'
+type SettingsTab = 'general' | 'profile' | 'google' | 'security' | 'api' | 'users' | 'activity' | 'system'
 
 type ApiKey = {
   id: string
@@ -721,6 +722,7 @@ export function SettingsPage() {
     { key: 'general', label: vi ? 'Chung' : 'General', icon: SlidersHorizontal },
     { key: 'profile', label: vi ? 'Tài khoản của tôi' : 'My Account', icon: User },
     { key: 'google', label: 'Google OAuth', icon: Cloud, adminOnly: true },
+    { key: 'security', label: vi ? 'Bảo mật' : 'Security', icon: ShieldCheck, adminOnly: true },
     { key: 'api', label: vi ? 'Khoá API' : 'API Keys', icon: KeyRound },
     { key: 'users', label: vi ? 'Người dùng' : 'Users', icon: Users, adminOnly: true },
     { key: 'activity', label: vi ? 'Hoạt động' : 'Activity', icon: History },
@@ -1223,6 +1225,8 @@ export function SettingsPage() {
           )}
 
           {/* 4. API KEYS TAB */}
+          {activeTab === 'security' && user?.isAdmin && <SecuritySettings vi={vi} />}
+
           {activeTab === 'api' && (
             <div className="space-y-6 text-xs">
               <div className="flex items-center justify-between">

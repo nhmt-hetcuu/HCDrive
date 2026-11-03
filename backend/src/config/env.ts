@@ -13,10 +13,14 @@ const envSchema = z.object({
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().default(30),
   MAX_UPLOAD_BYTES: z.coerce.number().default(5 * 1024 * 1024 * 1024),
   RECAPTCHA_SECRET_KEY: z.string().optional(),
+  RECAPTCHA_SITE_KEY: z.string().optional(),
+  // true: skip every captcha check (for an admin locked out by a wrong key in Settings → Security).
+  DISABLE_CAPTCHA: z.string().optional(),
   // Comma-separated admin emails. Empty = the first registered user is admin.
   ADMIN_EMAILS: z.string().optional(),
   // Which proxies may set X-Forwarded-For (and so the client IP that rate limits and the session list
-  // use). Unset/false: none, for a backend reached directly. "cloudflare": also trust CF-Connecting-IP
+  // use). Unset: detect Cloudflare and private-network proxies (nginx, Docker) automatically, see
+  // utils/client-ip.ts; Settings → Security can turn that off. "false": none, for a backend reached directly. "cloudflare": also trust CF-Connecting-IP
   // (only behind Cloudflare, where clients cannot reach the backend another way). Anything else goes
   // to Express "trust proxy" as is, e.g. "loopback", "1", "172.16.0.0/12".
   TRUST_PROXY: z.string().optional(),

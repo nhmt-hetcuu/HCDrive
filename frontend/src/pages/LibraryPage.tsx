@@ -8,14 +8,17 @@ import {
   ExternalLink,
   Folder,
   GraduationCap,
+  HardDriveDownload,
   Inbox,
   Link2,
   Loader2,
   Pencil,
   PlayCircle,
   Plus,
+  Share2,
   SkipForward,
   Trash2,
+  UserRound,
 } from 'lucide-react'
 import { apiFetch, API_URL, formatBytes, formatDriveDate } from '@/lib/api'
 import { useLanguage } from '@/context/LanguageContext'
@@ -24,6 +27,7 @@ import { getFileVisual } from '@/components/drive/DriveGridView'
 import { DummyModal } from '@/components/drive/DummyModal'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { SaveToDriveModal, ShareCourseModal } from '@/components/drive/LibraryDialogs'
 
 // Library: Drive links other people shared with the user (a bought course, a lesson folder, a document),
 // grouped into courses, with lessons played inside HCDrive and progress kept per lesson.
@@ -39,7 +43,9 @@ type SavedLink = {
   ownerName: string | null
   ownerEmail: string | null
   collection: string
+  teacher: string
   note: string
+  shared: boolean
   lastOpenedAt: string | null
   createdAt: string
   account: { id: string; email: string } | null
@@ -95,6 +101,7 @@ export function LibraryPage() {
   const [pickerOpen, setPickerOpen] = useState(false)
   const [editing, setEditing] = useState<SavedLink | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null)
+  const [sharing, setSharing] = useState<SavedLink | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -219,7 +226,7 @@ export function LibraryPage() {
             </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
               {items.map((link) => (
-                <LinkCard key={link.id} link={link} vi={vi} onOpen={() => open(link)} onEdit={() => setEditing(link)} onRemove={() => remove(link)} />
+                <LinkCard key={link.id} link={link} vi={vi} onOpen={() => open(link)} onEdit={() => setEditing(link)} onShare={() => setSharing(link)} onRemove={() => remove(link)} />
               ))}
             </div>
           </section>
@@ -229,6 +236,7 @@ export function LibraryPage() {
       <AddLinkModal open={addOpen} vi={vi} collections={collections.map(([name]) => name).filter(Boolean)} defaultCollection={activeCollection && activeCollection !== UNGROUPED ? activeCollection : ''} onClose={() => setAddOpen(false)} onAdded={(link) => { setLinks((current) => [...current.filter((item) => item.id !== link.id), link]); setAddOpen(false) }} />
       <SharedPickerModal open={pickerOpen} vi={vi} accounts={accounts} savedIds={new Set(links.map((link) => link.driveFileId))} collections={collections.map(([name]) => name).filter(Boolean)} onClose={() => setPickerOpen(false)} onDone={() => { setPickerOpen(false); load().catch(() => undefined) }} />
       <EditLinkModal link={editing} vi={vi} collections={collections.map(([name]) => name).filter(Boolean)} onClose={() => setEditing(null)} onSaved={(link) => { setLinks((current) => current.map((item) => (item.id === link.id ? link : item))); setEditing(null) }} />
+      <ShareCourseModal link={sharing} vi={vi} onClose={() => setSharing(null)} onChanged={(id, shared) => setLinks((current) => current.map((item) => (item.id === id ? { ...item, shared } : item)))} />
       <RenameCollectionModal name={renaming} vi={vi} onClose={() => setRenaming(null)} onDone={(from, to) => { setLinks((current) => current.map((link) => (link.collection === from ? { ...link, collection: to } : link))); if (activeCollection === from) setActiveCollection(to || UNGROUPED); setRenaming(null) }} />
     </div>
   )
@@ -270,7 +278,7 @@ function CollectionChip({ active, onClick, label, count }: { active: boolean; on
   )
 }
 
-function LinkCard({ link, vi, onOpen, onEdit, onRemove }: { link: SavedLink; vi: boolean; onOpen: () => void; onEdit: () => void; onRemove: () => void }) {
+function LinkCard({ link, vi, onOpen, onEdit, onShare, onRemove }: { link: SavedLink; vi: boolean; onOpen: () => void; onEdit: () => void; onShare: () => void; onRemove: () => void }) {
   const visual = link.isFolder ? { icon: Folder, color: 'text-slate-600 dark:text-slate-300', bg: 'bg-slate-100 dark:bg-slate-800' } : getFileVisual(link.mimeType)
   const Icon = visual.icon
   return (
@@ -286,6 +294,12 @@ function LinkCard({ link, vi, onOpen, onEdit, onRemove }: { link: SavedLink; vi:
           </p>
         </div>
       </div>
+      {link.teacher ? (
+        <p className="mt-2 flex items-center gap-1 truncate text-xs text-slate-600 dark:text-slate-300">
+          <UserRound className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+          <span className="truncate">{vi ? 'Giảng viên' : 'Teacher'}: {link.teacher}</span>
+        </p>
+      ) : null}
       {link.note ? <p className="mt-2 line-clamp-2 text-xs text-slate-500 dark:text-slate-400">{link.note}</p> : null}
       <div className="mt-3 flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
         <span className="flex items-center gap-1">
@@ -299,6 +313,9 @@ function LinkCard({ link, vi, onOpen, onEdit, onRemove }: { link: SavedLink; vi:
         <a href={link.url} target="_blank" rel="noreferrer" className="rounded-full p-1.5 text-slate-500 hover:bg-slate-100 dark:hover:bg-[#282a2c]" title={vi ? 'Mở trên Google Drive' : 'Open in Google Drive'} aria-label={vi ? 'Mở trên Google Drive' : 'Open in Google Drive'}>
           <ExternalLink className="h-4 w-4" />
         </a>
+        <button type="button" onClick={onShare} className={cn('rounded-full p-1.5 hover:bg-slate-100 dark:hover:bg-[#282a2c] cursor-pointer', link.shared ? 'text-[#0b57d0] dark:text-[#a8c7fa]' : 'text-slate-500')} title={vi ? 'Chia sẻ trong HCDrive' : 'Share in HCDrive'} aria-label={vi ? 'Chia sẻ trong HCDrive' : 'Share in HCDrive'}>
+          <Share2 className="h-4 w-4" />
+        </button>
         <button type="button" onClick={onEdit} className="rounded-full p-1.5 text-slate-500 hover:bg-slate-100 dark:hover:bg-[#282a2c] cursor-pointer" title={vi ? 'Sửa' : 'Edit'} aria-label={vi ? 'Sửa' : 'Edit'}>
           <Pencil className="h-4 w-4" />
         </button>
@@ -324,11 +341,21 @@ function CollectionInput({ value, onChange, collections, vi }: { value: string; 
   )
 }
 
+function TeacherInput({ value, onChange, vi }: { value: string; onChange: (value: string) => void; vi: boolean }) {
+  return (
+    <label className="block text-xs font-medium text-slate-600 dark:text-slate-300">
+      {vi ? 'Giáo viên / giảng viên' : 'Teacher / lecturer'}
+      <input value={value} onChange={(event) => onChange(event.target.value)} maxLength={200} placeholder={vi ? 'Ví dụ: ThS. Nguyễn Văn A' : 'Dr. Jane Doe'} className={cn(inputClass, 'mt-1')} />
+    </label>
+  )
+}
+
 function AddLinkModal({ open, vi, collections, defaultCollection, onClose, onAdded }: { open: boolean; vi: boolean; collections: string[]; defaultCollection: string; onClose: () => void; onAdded: (link: SavedLink) => void }) {
   const { showSnackbar } = useSnackbar()
   const [url, setUrl] = useState('')
   const [collection, setCollection] = useState('')
   const [title, setTitle] = useState('')
+  const [teacher, setTeacher] = useState('')
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
 
@@ -336,6 +363,7 @@ function AddLinkModal({ open, vi, collections, defaultCollection, onClose, onAdd
     if (!open) return
     setUrl('')
     setTitle('')
+    setTeacher('')
     setError('')
     setCollection(defaultCollection)
   }, [open, defaultCollection])
@@ -349,7 +377,7 @@ function AddLinkModal({ open, vi, collections, defaultCollection, onClose, onAdd
     setSaving(true)
     setError('')
     try {
-      const data = await apiFetch<{ link: SavedLink; existed: boolean }>('/library', { method: 'POST', body: JSON.stringify({ url: url.trim(), collection: collection.trim(), title: title.trim() || undefined }) })
+      const data = await apiFetch<{ link: SavedLink; existed: boolean }>('/library', { method: 'POST', body: JSON.stringify({ url: url.trim(), collection: collection.trim(), title: title.trim() || undefined, teacher: teacher.trim() || undefined }) })
       showSnackbar(data.existed ? (vi ? 'Link này đã có trong thư viện' : 'Already in your library') : (vi ? 'Đã thêm vào thư viện' : 'Added to your library'))
       onAdded(data.link)
     } catch (err) {
@@ -367,6 +395,7 @@ function AddLinkModal({ open, vi, collections, defaultCollection, onClose, onAdd
           <input autoFocus value={url} onChange={(event) => { setUrl(event.target.value); setError('') }} placeholder="https://drive.google.com/drive/folders/…" className={cn(inputClass, 'mt-1')} />
         </label>
         <CollectionInput value={collection} onChange={setCollection} collections={collections} vi={vi} />
+        <TeacherInput value={teacher} onChange={setTeacher} vi={vi} />
         <label className="block text-xs font-medium text-slate-600 dark:text-slate-300">
           {vi ? 'Tên hiển thị (để trống = tên trên Drive)' : 'Display name (blank = the Drive name)'}
           <input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={300} className={cn(inputClass, 'mt-1')} />
@@ -464,6 +493,7 @@ function SharedPickerModal({ open, vi, accounts, savedIds, collections, onClose,
 function EditLinkModal({ link, vi, collections, onClose, onSaved }: { link: SavedLink | null; vi: boolean; collections: string[]; onClose: () => void; onSaved: (link: SavedLink) => void }) {
   const [title, setTitle] = useState('')
   const [collection, setCollection] = useState('')
+  const [teacher, setTeacher] = useState('')
   const [note, setNote] = useState('')
   const [error, setError] = useState('')
 
@@ -471,6 +501,7 @@ function EditLinkModal({ link, vi, collections, onClose, onSaved }: { link: Save
     if (!link) return
     setTitle(link.title)
     setCollection(link.collection)
+    setTeacher(link.teacher)
     setNote(link.note)
     setError('')
   }, [link])
@@ -483,7 +514,7 @@ function EditLinkModal({ link, vi, collections, onClose, onSaved }: { link: Save
       return
     }
     try {
-      const data = await apiFetch<{ link: SavedLink }>(`/library/${link.id}`, { method: 'PATCH', body: JSON.stringify({ title: title.trim(), collection: collection.trim(), note }) })
+      const data = await apiFetch<{ link: SavedLink }>(`/library/${link.id}`, { method: 'PATCH', body: JSON.stringify({ title: title.trim(), collection: collection.trim(), teacher: teacher.trim(), note }) })
       onSaved(data.link)
     } catch (err) {
       setError(errorText(err, vi ? 'Không lưu được' : 'Could not save'))
@@ -498,6 +529,7 @@ function EditLinkModal({ link, vi, collections, onClose, onSaved }: { link: Save
           <input value={title} onChange={(event) => { setTitle(event.target.value); setError('') }} maxLength={300} className={cn(inputClass, 'mt-1')} />
         </label>
         <CollectionInput value={collection} onChange={setCollection} collections={collections} vi={vi} />
+        <TeacherInput value={teacher} onChange={setTeacher} vi={vi} />
         <label className="block text-xs font-medium text-slate-600 dark:text-slate-300">
           {vi ? 'Ghi chú' : 'Note'}
           <textarea value={note} onChange={(event) => setNote(event.target.value)} maxLength={5000} rows={4} placeholder={vi ? 'Mật khẩu nhóm, link nhóm hỗ trợ, hạn truy cập…' : 'Support group link, access expiry…'} className={cn(inputClass, 'mt-1 resize-y')} />
@@ -554,6 +586,9 @@ function LessonView({ link, vi, onBack, onEdit, editing, onEdited, onCloseEdit, 
   const [error, setError] = useState('')
   const [account, setAccount] = useState<{ id: string; email: string } | null>(null)
   const [current, setCurrent] = useState<Lesson | null>(null)
+  const [shareOpen, setShareOpen] = useState(false)
+  const [saveOpen, setSaveOpen] = useState(false)
+  const [shared, setShared] = useState(link.shared)
   const folder = path[path.length - 1]
 
   useEffect(() => {
@@ -623,7 +658,10 @@ function LessonView({ link, vi, onBack, onEdit, editing, onEdited, onCloseEdit, 
           ))}
         </nav>
         {link.collection ? <span className="rounded-md bg-[#c2e7ff]/60 px-2 py-0.5 text-[11px] text-[#001d35] dark:bg-[#004a77] dark:text-[#c2e7ff]">{link.collection}</span> : null}
+        {link.teacher ? <span className="flex items-center gap-1 text-xs text-slate-600 dark:text-slate-300"><UserRound className="h-3.5 w-3.5 text-slate-400" />{link.teacher}</span> : null}
         <Button size="sm" variant="ghost" onClick={onEdit}><Pencil className="mr-1.5 h-4 w-4" />{vi ? 'Sửa' : 'Edit'}</Button>
+        <Button size="sm" variant="ghost" onClick={() => setShareOpen(true)} className={cn(shared && 'text-[#0b57d0] dark:text-[#a8c7fa]')}><Share2 className="mr-1.5 h-4 w-4" />{vi ? 'Chia sẻ' : 'Share'}</Button>
+        <Button size="sm" variant="ghost" onClick={() => setSaveOpen(true)}><HardDriveDownload className="mr-1.5 h-4 w-4" />{vi ? 'Lưu vào Drive' : 'Save to Drive'}</Button>
         <a href={link.url} target="_blank" rel="noreferrer" className="inline-flex h-8 items-center rounded-full px-3 text-xs text-[#0b57d0] hover:bg-[#0b57d0]/10 dark:text-[#a8c7fa]">
           <ExternalLink className="mr-1.5 h-4 w-4" />Google Drive
         </a>
@@ -695,6 +733,8 @@ function LessonView({ link, vi, onBack, onEdit, editing, onEdited, onCloseEdit, 
         </div>
       </div>
       <EditLinkModal link={editing} vi={vi} collections={collections.filter(Boolean)} onClose={onCloseEdit} onSaved={onEdited} />
+      <ShareCourseModal link={shareOpen ? { ...link, shared } : null} vi={vi} onClose={() => setShareOpen(false)} onChanged={(_id, value) => setShared(value)} />
+      <SaveToDriveModal link={saveOpen ? link : null} vi={vi} onClose={() => setSaveOpen(false)} />
     </div>
   )
 }

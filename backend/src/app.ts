@@ -5,6 +5,7 @@ import path from 'node:path'
 import { env } from './config/env.js'
 import { errorMiddleware } from './middleware/error.middleware.js'
 import { limiters } from './middleware/rate-limit.js'
+import { autoClientIp, loadProxyMode, refreshCloudflareRanges } from './utils/client-ip.js'
 import { authRouter } from './modules/auth/auth.routes.js'
 import { providerConfigRouter } from './modules/provider-configs/provider-config.routes.js'
 import { connectedAccountRouter } from './modules/connected-accounts/connected-account.routes.js'
@@ -24,11 +25,19 @@ import { libraryRouter } from './modules/library/library.routes.js'
 export const app = express()
 
 // Client IP. Trusting every X-Forwarded-For / CF-Connecting-IP let any client pick its own IP and
-// step around IP-based rate limits, so proxies are trusted only as TRUST_PROXY says (see env.ts).
+// step around IP-based rate limits. Without TRUST_PROXY, HCDrive detects Cloudflare and private-network
+// proxies (nginx, Docker) itself and trusts only their headers (utils/client-ip.ts, mode set in
+// Settings → Security). TRUST_PROXY in the environment overrides that (see env.ts).
 const trustProxy = env.TRUST_PROXY?.trim()
 const behindCloudflare = trustProxy === 'cloudflare'
-if (behindCloudflare || trustProxy === 'true') app.set('trust proxy', true)
-else if (trustProxy && trustProxy !== 'false') app.set('trust proxy', /^\d+$/.test(trustProxy) ? Number(trustProxy) : trustProxy)
+if (!trustProxy) {
+  app.set('trust proxy', false)
+  loadProxyMode().catch(() => undefined)
+  refreshCloudflareRanges().catch(() => undefined)
+  setInterval(() => refreshCloudflareRanges().catch(() => undefined), 24 * 60 * 60_000).unref()
+  app.use(autoClientIp)
+} else if (behindCloudflare || trustProxy === 'true') app.set('trust proxy', true)
+else if (trustProxy !== 'false') app.set('trust proxy', /^\d+$/.test(trustProxy) ? Number(trustProxy) : trustProxy)
 else app.set('trust proxy', false)
 
 if (behindCloudflare) {

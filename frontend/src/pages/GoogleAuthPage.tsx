@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { HardDrive } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { apiFetch } from '@/lib/api'
-import { setAuthSession, type AuthUser } from '@/lib/auth'
+import { setAuthSession, takeReturnPath, type AuthUser } from '@/lib/auth'
 
 type AuthResponse = { accessToken: string; refreshToken: string; user: AuthUser }
 
@@ -23,7 +23,7 @@ export function GoogleAuthPage() {
     apiFetch<AuthResponse>('/auth/google/exchange', { method: 'POST', skipAuth: true, body: JSON.stringify({ token }) })
       .then((data) => {
         setAuthSession(data.accessToken, data.refreshToken, data.user)
-        navigate('/all-files', { replace: true })
+        navigate(takeReturnPath('/all-files'), { replace: true })
       })
       .catch((error) => setMessage(error instanceof Error ? error.message : 'Google sign-in failed. Please try again.'))
   }, [navigate, status, token])

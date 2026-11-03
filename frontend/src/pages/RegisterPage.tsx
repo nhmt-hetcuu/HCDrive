@@ -1,25 +1,16 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { AlertCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { GoogleLogo } from '@/components/auth/GoogleLogo'
+import { CaptchaWidget, captchaFor, type CaptchaConfig } from '@/components/auth/CaptchaWidget'
 import { BrandLogo } from '@/components/drive/BrandLogo'
 import { apiFetch } from '@/lib/api'
-import { setAuthSession, type AuthUser } from '@/lib/auth'
+import { setAuthSession, takeReturnPath, type AuthUser } from '@/lib/auth'
 import { useLanguage } from '@/context/LanguageContext'
 import { cn } from '@/lib/utils'
 
 type AuthResponse = { accessToken: string; refreshToken: string; user: AuthUser }
-const recaptchaSiteKey = import.meta.env.VITE_RECAPTCHA_SITE_KEY?.trim()
-
-declare global {
-  interface Window {
-    grecaptcha?: {
-      render: (element: HTMLElement, options: { sitekey: string; callback: (token: string) => void; 'expired-callback': () => void }) => number
-      reset: (widgetId?: number) => void
-    }
-  }
-}
 
 export function RegisterPage() {
   const navigate = useNavigate()
@@ -34,44 +25,22 @@ export function RegisterPage() {
   const [loading, setLoading] = useState(false)
   const [googleLoading, setGoogleLoading] = useState(false)
   const [allowRegistration, setAllowRegistration] = useState<boolean | null>(null)
+  const [captchaConfig, setCaptchaConfig] = useState<CaptchaConfig | null>(null)
+  const [captchaReset, setCaptchaReset] = useState(0)
+  const captcha = captchaFor(captchaConfig, 'register')
 
   // Floating label focus states
   const [nameFocused, setNameFocused] = useState(false)
   const [emailFocused, setEmailFocused] = useState(false)
   const [passwordFocused, setPasswordFocused] = useState(false)
 
-  const recaptchaRef = useRef<HTMLDivElement | null>(null)
-  const recaptchaWidgetId = useRef<number | null>(null)
-
   useEffect(() => {
-    apiFetch<{ allowRegistration: boolean }>('/auth/config', { skipAuth: true })
-      .then((data) => setAllowRegistration(data.allowRegistration))
-      .catch(() => setAllowRegistration(true))
-  }, [])
-
-  useEffect(() => {
-    if (!recaptchaSiteKey) return
-    const scriptId = 'google-recaptcha-script'
-    const renderCaptcha = () => {
-      if (!recaptchaRef.current || !window.grecaptcha || recaptchaWidgetId.current !== null) return
-      recaptchaWidgetId.current = window.grecaptcha.render(recaptchaRef.current, {
-        sitekey: recaptchaSiteKey,
-        callback: setCaptchaToken,
-        'expired-callback': () => setCaptchaToken(''),
+    apiFetch<{ allowRegistration: boolean; captcha?: CaptchaConfig }>('/auth/config', { skipAuth: true })
+      .then((data) => {
+        setAllowRegistration(data.allowRegistration)
+        setCaptchaConfig(data.captcha ?? null)
       })
-    }
-
-    if (!document.getElementById(scriptId)) {
-      const script = document.createElement('script')
-      script.id = scriptId
-      script.src = 'https://www.google.com/recaptcha/api.js?render=explicit'
-      script.async = true
-      script.defer = true
-      script.onload = renderCaptcha
-      document.body.appendChild(script)
-    } else {
-      renderCaptcha()
-    }
+      .catch(() => setAllowRegistration(true))
   }, [])
 
   async function continueWithGoogle() {
@@ -90,7 +59,7 @@ export function RegisterPage() {
     event.preventDefault()
     setLoading(true)
     setError('')
-    if (recaptchaSiteKey && !captchaToken) {
+    if (captcha && !captchaToken) {
       setError(vi ? 'Vui lòng hoàn thành xác thực captcha' : 'Please complete the captcha.')
       setLoading(false)
       return
@@ -102,10 +71,10 @@ export function RegisterPage() {
         body: JSON.stringify({ name, email, password, captchaToken }),
       })
       setAuthSession(data.accessToken, data.refreshToken, data.user)
-      navigate('/home')
+      navigate(takeReturnPath('/home'))
     } catch (err) {
       setError(err instanceof Error ? err.message : vi ? 'Đăng ký thất bại' : 'Register failed')
-      if (recaptchaWidgetId.current !== null) window.grecaptcha?.reset(recaptchaWidgetId.current)
+      setCaptchaReset((value) => value + 1)
       setCaptchaToken('')
     } finally {
       setLoading(false)
@@ -245,11 +214,9 @@ export function RegisterPage() {
                   </label>
                 </div>
 
-                {/* Recaptcha if active */}
-                {recaptchaSiteKey && (
-                  <div className="min-h-[78px] overflow-hidden rounded-xl bg-slate-50 dark:bg-slate-900 p-2 border border-slate-200 dark:border-slate-800">
-                    <div ref={recaptchaRef} />
-                  </div>
+                {/* Captcha (reCAPTCHA or Turnstile) when the admin turned it on */}
+                {captcha && (
+                  <CaptchaWidget provider={captcha.provider} siteKey={captcha.siteKey} onToken={setCaptchaToken} resetKey={captchaReset} vi={vi} />
                 )}
 
                 {/* Error */}

@@ -4,9 +4,10 @@ import { AlertCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DummyModal } from '@/components/drive/DummyModal'
 import { GoogleLogo } from '@/components/auth/GoogleLogo'
+import { CaptchaWidget, captchaFor, type CaptchaConfig } from '@/components/auth/CaptchaWidget'
 import { BrandLogo } from '@/components/drive/BrandLogo'
 import { apiFetch } from '@/lib/api'
-import { setAuthSession, type AuthUser } from '@/lib/auth'
+import { setAuthSession, takeReturnPath, type AuthUser } from '@/lib/auth'
 import { useLanguage } from '@/context/LanguageContext'
 import { cn } from '@/lib/utils'
 
@@ -28,6 +29,10 @@ export function LoginPage() {
   const [loading, setLoading] = useState(false)
   const [googleLoading, setGoogleLoading] = useState(false)
   const [allowRegistration, setAllowRegistration] = useState<boolean | null>(null)
+  const [captchaConfig, setCaptchaConfig] = useState<CaptchaConfig | null>(null)
+  const [captchaToken, setCaptchaToken] = useState('')
+  const [captchaReset, setCaptchaReset] = useState(0)
+  const captcha = captchaFor(captchaConfig, 'login')
 
   const [oauthModalOpen, setOauthModalOpen] = useState(false)
   const [selectedMethod, setSelectedMethod] = useState<'rclone' | 'custom'>('rclone')
@@ -38,8 +43,11 @@ export function LoginPage() {
   const [passwordFocused, setPasswordFocused] = useState(false)
 
   useEffect(() => {
-    apiFetch<{ allowRegistration: boolean }>('/auth/config', { skipAuth: true })
-      .then((data) => setAllowRegistration(data.allowRegistration))
+    apiFetch<{ allowRegistration: boolean; captcha?: CaptchaConfig }>('/auth/config', { skipAuth: true })
+      .then((data) => {
+        setAllowRegistration(data.allowRegistration)
+        setCaptchaConfig(data.captcha ?? null)
+      })
       .catch(() => setAllowRegistration(true))
 
     apiFetch<{ hasCustom: boolean; defaultMethod: 'rclone' | 'custom' }>('/auth/google/methods', { skipAuth: true })
@@ -73,18 +81,27 @@ export function LoginPage() {
 
   async function submit(event: FormEvent) {
     event.preventDefault()
+    if (captcha && !captchaToken) {
+      setError(vi ? 'Vui lòng hoàn thành xác thực captcha' : 'Please complete the captcha.')
+      return
+    }
     setLoading(true)
     setError('')
     try {
       const data = await apiFetch<AuthResponse>('/auth/login', {
         method: 'POST',
         skipAuth: true,
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, captchaToken: captcha ? captchaToken : undefined }),
       })
       setAuthSession(data.accessToken, data.refreshToken, data.user)
-      navigate('/home')
+      navigate(takeReturnPath('/home'))
     } catch (err) {
       setError(err instanceof Error ? err.message : vi ? 'Đăng nhập không thành công' : 'Login failed')
+      // A captcha token is single-use: a failed attempt needs a new one.
+      if (captcha) {
+        setCaptchaToken('')
+        setCaptchaReset((value) => value + 1)
+      }
     } finally {
       setLoading(false)
     }
@@ -176,6 +193,10 @@ export function LoginPage() {
                   {vi ? 'Nhập mật khẩu của bạn' : 'Enter your password'}
                 </label>
               </div>
+
+              {captcha && (
+                <CaptchaWidget provider={captcha.provider} siteKey={captcha.siteKey} onToken={setCaptchaToken} resetKey={captchaReset} vi={vi} />
+              )}
 
               {/* Error Message: Google style (Icon ⓘ + Danger text, no color box) */}
               {error && (

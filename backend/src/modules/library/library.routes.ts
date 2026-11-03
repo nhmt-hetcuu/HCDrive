@@ -7,11 +7,14 @@ import type { drive_v3 } from 'googleapis'
 import { prisma } from '../../config/prisma.js'
 import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.js'
 import { ownedBy, requireOwned, type OwnedRequest } from '../../middleware/ownership.js'
-import { getAuthedGoogleClient, getGoogleDriveClient } from '../google/google.service.js'
+import { ensureGoogleAppFolder, getAuthedGoogleClient, getGoogleDriveClient, syncGoogleAppFolderFiles } from '../google/google.service.js'
 import { normalizeHeaders } from '../files/stream-google-file.js'
 import { getAccountProxyUrl, getUndiciDispatcher } from '../../utils/proxy.js'
 import { noteGoogleError } from '../../utils/google-backoff.js'
 import { signId, verifySignedId } from '../../utils/signed-url.js'
+import { decryptText, encryptText, hashToken, randomToken } from '../../utils/crypto.js'
+import { isGoogleRateLimit } from '../../utils/google-backoff.js'
+import { mapLimit } from '../../utils/concurrency.js'
 
 // Library of Drive links other people shared with the user (bought courses, lesson folders, documents).
 // HCDrive opens them through the user's own Google account that received the share, so it can only
@@ -114,7 +117,9 @@ function serializeLink(link: LinkWithAccount) {
     ownerName: link.ownerName,
     ownerEmail: link.ownerEmail,
     collection: link.collection,
+    teacher: link.teacher,
     note: link.note,
+    shared: Boolean(link.shareTokenHash),
     lastOpenedAt: link.lastOpenedAt,
     createdAt: link.createdAt,
     account: link.connectedAccount ? { id: link.connectedAccount.id, email: link.connectedAccount.email } : null,
@@ -201,51 +206,126 @@ const addSchema = z.object({
   accountId: z.string().uuid().optional(),
   collection: z.string().trim().max(120).optional(),
   title: z.string().trim().max(300).optional(),
+  teacher: z.string().trim().max(200).optional(),
 }).refine((body) => body.url || body.fileId, { message: 'url or fileId is required' })
+
+type NewLink = { fileId: string; resourceKey: string | null; url?: string; accountId?: string; collection?: string; title?: string; teacher?: string }
+
+/** Saves a link for the user, opened through one of their own Google accounts; null when none can open it. */
+async function createSavedLink(userId: string, input: NewLink) {
+  const existing = await prisma.savedLink.findFirst({ where: { userId, driveFileId: input.fileId }, include: linkInclude })
+  if (existing) {
+    const data = {
+      ...(input.collection !== undefined && input.collection !== existing.collection ? { collection: input.collection } : {}),
+      ...(input.teacher && !existing.teacher ? { teacher: input.teacher } : {}),
+    }
+    const updated = Object.keys(data).length ? await prisma.savedLink.update({ where: { id: existing.id }, data, include: linkInclude }) : existing
+    return { link: updated, existed: true }
+  }
+
+  let fileId = input.fileId
+  let resourceKey = input.resourceKey
+  let found = await findAccountFor(userId, fileId, resourceKey, input.accountId)
+  // A shortcut in "Shared with me" points at the real item: save that one.
+  if (found?.meta.mimeType === SHORTCUT_MIME && found.meta.shortcutDetails?.targetId) {
+    const target = found.meta.shortcutDetails
+    fileId = target.targetId!
+    resourceKey = target.targetResourceKey ?? null
+    found = await findAccountFor(userId, fileId, resourceKey, found.account.id)
+  }
+  if (!found) return null
+
+  const meta = found.meta
+  const owner = meta.owners?.[0]
+  const link = await prisma.savedLink.create({
+    data: {
+      userId,
+      connectedAccountId: found.account.id,
+      driveFileId: fileId,
+      resourceKey: meta.resourceKey ?? resourceKey,
+      url: input.url ?? meta.webViewLink ?? `https://drive.google.com/open?id=${fileId}`,
+      title: input.title || meta.name || fileId,
+      mimeType: meta.mimeType ?? 'application/octet-stream',
+      ownerName: owner?.displayName ?? null,
+      ownerEmail: owner?.emailAddress ?? null,
+      collection: input.collection ?? '',
+      teacher: input.teacher ?? '',
+    },
+    include: linkInclude,
+  })
+  return { link, existed: false }
+}
 
 libraryRouter.post('/', async (req: AuthRequest, res, next) => {
   try {
     const body = addSchema.parse(req.body)
     const parsed = body.url ? parseDriveLink(body.url) : { fileId: body.fileId!, resourceKey: null }
     if (!parsed) return res.status(400).json({ code: 'INVALID_LINK', message: 'Link không phải link Google Drive / Google Docs.' })
+    const result = await createSavedLink(req.user!.id, { ...parsed, url: body.url, accountId: body.accountId, collection: body.collection, title: body.title, teacher: body.teacher })
+    if (!result) return noAccess(res)
+    return res.status(result.existed ? 200 : 201).json({ link: serializeLink(result.link), existed: result.existed })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+// ---- Internal share link: another HCDrive user adds the course to their own library ----
+// The link carries the course details (Drive link, name, teacher), never access: the recipient opens
+// it through their own Google account, so the course owner's sharing settings still decide who can watch.
+
+const sharePath = (token: string) => `/library/s/${token}`
+
+libraryRouter.get('/shared/:token', async (req: AuthRequest, res, next) => {
+  try {
+    const link = await prisma.savedLink.findUnique({ where: { shareTokenHash: hashToken(String(req.params.token)) }, include: { user: { select: { name: true } } } })
+    if (!link) return res.status(404).json({ code: 'SHARE_NOT_FOUND', message: 'Link chia sẻ không tồn tại hoặc đã bị tắt.' })
     const userId = req.user!.id
-
-    const existing = await prisma.savedLink.findFirst({ where: { userId, driveFileId: parsed.fileId }, include: linkInclude })
-    if (existing) {
-      const updated = body.collection !== undefined && body.collection !== existing.collection
-        ? await prisma.savedLink.update({ where: { id: existing.id }, data: { collection: body.collection }, include: linkInclude })
-        : existing
-      return res.json({ link: serializeLink(updated), existed: true })
-    }
-
-    let found = await findAccountFor(userId, parsed.fileId, parsed.resourceKey, body.accountId)
-    // A shortcut in "Shared with me" points at the real item: save that one.
-    if (found?.meta.mimeType === SHORTCUT_MIME && found.meta.shortcutDetails?.targetId) {
-      const target = found.meta.shortcutDetails
-      parsed.fileId = target.targetId!
-      parsed.resourceKey = target.targetResourceKey ?? null
-      found = await findAccountFor(userId, parsed.fileId, parsed.resourceKey, found.account.id)
-    }
-    if (!found) return noAccess(res)
-
-    const meta = found.meta
-    const owner = meta.owners?.[0]
-    const link = await prisma.savedLink.create({
-      data: {
-        userId,
-        connectedAccountId: found.account.id,
-        driveFileId: parsed.fileId,
-        resourceKey: meta.resourceKey ?? parsed.resourceKey,
-        url: body.url ?? meta.webViewLink ?? `https://drive.google.com/open?id=${parsed.fileId}`,
-        title: body.title || meta.name || parsed.fileId,
-        mimeType: meta.mimeType ?? 'application/octet-stream',
-        ownerName: owner?.displayName ?? null,
-        ownerEmail: owner?.emailAddress ?? null,
-        collection: body.collection ?? '',
+    const [mine, access, accounts] = await Promise.all([
+      prisma.savedLink.findFirst({ where: { userId, driveFileId: link.driveFileId }, select: { id: true } }),
+      findAccountFor(userId, link.driveFileId, link.resourceKey),
+      ownGoogleAccounts(userId),
+    ])
+    return res.json({
+      course: {
+        title: link.title,
+        teacher: link.teacher,
+        collection: link.collection,
+        mimeType: link.mimeType,
+        isFolder: link.mimeType === FOLDER_MIME,
+        url: link.url,
+        ownerName: link.ownerName,
+        ownerEmail: link.ownerEmail,
+        sharedBy: link.user.name,
       },
-      include: linkInclude,
+      savedLinkId: mine?.id ?? null,
+      access: access ? { ok: true, accountEmail: access.account.email } : { ok: false, accountEmail: null },
+      accountEmails: accounts.map((account) => account.email),
     })
-    return res.status(201).json({ link: serializeLink(link), existed: false })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+libraryRouter.post('/shared/:token/save', async (req: AuthRequest, res, next) => {
+  try {
+    const body = z.object({ collection: z.string().trim().max(120).optional() }).parse(req.body ?? {})
+    const link = await prisma.savedLink.findUnique({ where: { shareTokenHash: hashToken(String(req.params.token)) } })
+    if (!link) return res.status(404).json({ code: 'SHARE_NOT_FOUND', message: 'Link chia sẻ không tồn tại hoặc đã bị tắt.' })
+    const result = await createSavedLink(req.user!.id, {
+      fileId: link.driveFileId,
+      resourceKey: link.resourceKey,
+      url: link.url,
+      collection: body.collection ?? link.collection,
+      title: link.title,
+      teacher: link.teacher,
+    })
+    if (!result) {
+      return res.status(404).json({
+        code: 'LINK_NOT_ACCESSIBLE',
+        message: 'Tài khoản Google của bạn chưa được chia sẻ khóa học này. Xin người bán / giảng viên chia sẻ cho email của bạn, rồi thử lại.',
+      })
+    }
+    return res.status(result.existed ? 200 : 201).json({ link: serializeLink(result.link), existed: result.existed })
   } catch (error) {
     return next(error)
   }
@@ -254,6 +334,7 @@ libraryRouter.post('/', async (req: AuthRequest, res, next) => {
 const patchSchema = z.object({
   title: z.string().trim().min(1).max(300).optional(),
   collection: z.string().trim().max(120).optional(),
+  teacher: z.string().trim().max(200).optional(),
   note: z.string().max(5000).optional(),
 })
 
@@ -365,6 +446,200 @@ libraryRouter.get('/:id/items', loadOwnedLink, async (req: OwnedRequest<SavedLin
       .sort((a, b) => Number(b.isFolder) - Number(a.isFolder) || naturalName.compare(a.name, b.name))
 
     return res.json({ items, account: { id: account.id, email: account.email } })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+libraryRouter.get('/:id/share', loadOwnedLink, (req: OwnedRequest<SavedLink>, res) => {
+  const link = req.owned!
+  let token: string | null = null
+  try {
+    token = link.shareTokenEncrypted ? decryptText(link.shareTokenEncrypted) : null
+  } catch {
+    token = null
+  }
+  return res.json({ path: token ? sharePath(token) : null })
+})
+
+libraryRouter.post('/:id/share', loadOwnedLink, async (req: OwnedRequest<SavedLink>, res, next) => {
+  try {
+    const link = req.owned!
+    if (link.shareTokenEncrypted) {
+      try {
+        return res.json({ path: sharePath(decryptText(link.shareTokenEncrypted)) })
+      } catch {
+        // unreadable (encryption key changed): make a new one
+      }
+    }
+    const token = randomToken(24)
+    await prisma.savedLink.update({ where: { id: link.id }, data: { shareTokenHash: hashToken(token), shareTokenEncrypted: encryptText(token) } })
+    return res.status(201).json({ path: sharePath(token) })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+libraryRouter.delete('/:id/share', loadOwnedLink, async (req: OwnedRequest<SavedLink>, res, next) => {
+  try {
+    await prisma.savedLink.update({ where: { id: req.owned!.id }, data: { shareTokenHash: null, shareTokenEncrypted: null } })
+    return res.json({ ok: true })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+// ---- Save the course into the user's own Drive (real copies, not shortcuts) ----
+
+type CopyJob = {
+  status: 'running' | 'done' | 'failed'
+  accountEmail: string
+  folderName: string
+  folderUrl: string | null
+  copied: number
+  folders: number
+  /** Files the owner does not allow copying (Drive refuses them). */
+  skipped: number
+  failed: number
+  current: string | null
+  error: string | null
+  startedAt: string
+  finishedAt: string | null
+}
+
+const copyJobs = new Map<string, CopyJob>()
+const COPY_FIELDS = 'nextPageToken,files(id,name,mimeType,resourceKey,capabilities(canCopy),shortcutDetails(targetId,targetMimeType,targetResourceKey))'
+
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/** Runs a Drive call, waiting out per-minute limits instead of failing the whole copy. */
+async function withRetry<T>(accountId: string, call: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await call()
+    } catch (error) {
+      if (!isGoogleRateLimit(error) || attempt >= 3) {
+        noteGoogleError(accountId, error)
+        throw error
+      }
+      await wait(30_000 * (attempt + 1))
+    }
+  }
+}
+
+async function copyFolderTree(account: ConnectedAccount, drive: drive_v3.Drive, sourceId: string, resourceKey: string | null, targetParentId: string, job: CopyJob) {
+  const children: drive_v3.Schema$File[] = []
+  let pageToken: string | undefined
+  do {
+    const page: { data: drive_v3.Schema$FileList } = await withRetry(account.id, () => drive.files.list({
+      q: `'${sourceId}' in parents and trashed = false`,
+      fields: COPY_FIELDS,
+      pageSize: 1000,
+      pageToken,
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+    }, { headers: resourceKeyHeaders(sourceId, resourceKey) }))
+    children.push(...(page.data.files ?? []))
+    pageToken = page.data.nextPageToken ?? undefined
+  } while (pageToken)
+
+  const folders = children.filter((child) => (child.shortcutDetails?.targetMimeType ?? child.mimeType) === FOLDER_MIME)
+  const files = children.filter((child) => !folders.includes(child))
+
+  await mapLimit(files, 3, async (file) => {
+    // A shortcut inside the course is copied as the file it points to.
+    const id = file.shortcutDetails?.targetId ?? file.id!
+    const key = file.shortcutDetails ? file.shortcutDetails.targetResourceKey ?? null : file.resourceKey ?? null
+    if (!file.shortcutDetails && file.capabilities?.canCopy === false) {
+      job.skipped += 1
+      return
+    }
+    job.current = file.name ?? id
+    try {
+      await withRetry(account.id, () => drive.files.copy({ fileId: id, requestBody: { name: file.name ?? undefined, parents: [targetParentId] }, fields: 'id', supportsAllDrives: true }, { headers: resourceKeyHeaders(id, key) }))
+      job.copied += 1
+    } catch (error) {
+      // 403: the owner does not allow copying this one.
+      if ((error as { response?: { status?: number } })?.response?.status === 403) job.skipped += 1
+      else job.failed += 1
+    }
+  })
+
+  for (const folder of folders) {
+    const id = folder.shortcutDetails?.targetId ?? folder.id!
+    const key = folder.shortcutDetails ? folder.shortcutDetails.targetResourceKey ?? null : folder.resourceKey ?? null
+    const created = await withRetry(account.id, () => drive.files.create({ requestBody: { name: folder.name ?? id, mimeType: FOLDER_MIME, parents: [targetParentId] }, fields: 'id', supportsAllDrives: true }))
+    job.folders += 1
+    await copyFolderTree(account, drive, id, key, created.data.id!, job)
+  }
+}
+
+async function runCopyJob(link: SavedLink, account: ConnectedAccount, job: CopyJob) {
+  try {
+    const drive = await driveFor(account)
+    const parentId = await ensureGoogleAppFolder(account)
+    if (link.mimeType === FOLDER_MIME) {
+      const description = [link.teacher ? `Giảng viên: ${link.teacher}` : '', `Nguồn: ${link.url}`].filter(Boolean).join('\n')
+      const folder = await withRetry(account.id, () => drive.files.create({
+        requestBody: { name: job.folderName, mimeType: FOLDER_MIME, parents: [parentId], description },
+        fields: 'id,webViewLink',
+        supportsAllDrives: true,
+      }))
+      job.folderUrl = folder.data.webViewLink ?? null
+      job.folders += 1
+      await copyFolderTree(account, drive, link.driveFileId, link.resourceKey, folder.data.id!, job)
+    } else {
+      job.current = link.title
+      const meta = await withRetry(account.id, () => drive.files.get({ fileId: link.driveFileId, fields: 'capabilities(canCopy)', supportsAllDrives: true }, { headers: resourceKeyHeaders(link.driveFileId, link.resourceKey) }))
+      if (meta.data.capabilities?.canCopy === false) {
+        job.skipped += 1
+      } else {
+        const copied = await withRetry(account.id, () => drive.files.copy({ fileId: link.driveFileId, requestBody: { name: job.folderName, parents: [parentId] }, fields: 'id,webViewLink', supportsAllDrives: true }, { headers: resourceKeyHeaders(link.driveFileId, link.resourceKey) }))
+        job.folderUrl = copied.data.webViewLink ?? null
+        job.copied += 1
+      }
+    }
+    job.status = 'done'
+  } catch (error) {
+    job.status = 'failed'
+    job.error = error instanceof Error ? error.message : String(error)
+  } finally {
+    job.current = null
+    job.finishedAt = new Date().toISOString()
+    // Bring the new copies into "Drive của tôi".
+    syncGoogleAppFolderFiles(account.id, account.userId, { force: true }).catch(() => undefined)
+  }
+}
+
+libraryRouter.get('/:id/save-to-drive', loadOwnedLink, (req: OwnedRequest<SavedLink>, res) => {
+  return res.json({ job: copyJobs.get(req.owned!.id) ?? null })
+})
+
+libraryRouter.post('/:id/save-to-drive', loadOwnedLink, async (req: OwnedRequest<SavedLink>, res, next) => {
+  try {
+    const link = req.owned!
+    const running = copyJobs.get(link.id)
+    if (running?.status === 'running') return res.status(202).json({ job: running })
+    // The copy is made by the account that can open the course, into that account's own Drive.
+    const account = await accountForLink(link)
+    if (!account) return noAccess(res)
+    const job: CopyJob = {
+      status: 'running',
+      accountEmail: account.email,
+      folderName: link.teacher ? `${link.title} - ${link.teacher}` : link.title,
+      folderUrl: null,
+      copied: 0,
+      folders: 0,
+      skipped: 0,
+      failed: 0,
+      current: null,
+      error: null,
+      startedAt: new Date().toISOString(),
+      finishedAt: null,
+    }
+    copyJobs.set(link.id, job)
+    runCopyJob(link, account, job).catch(() => undefined)
+    return res.status(202).json({ job })
   } catch (error) {
     return next(error)
   }
