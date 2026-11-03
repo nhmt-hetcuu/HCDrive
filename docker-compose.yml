@@ -1,0 +1,33 @@
+services:
+  hcdrive:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    volumes:
+      - hcdrive_data:/app/data
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-file:/app/data/hcdrive.db}
+      APP_PORT: 4000
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-change-this-jwt-secret-at-least-32-chars}
+      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:-change-this-encryption-key-32bytes!}
+      ACCESS_TOKEN_TTL_SECONDS: ${ACCESS_TOKEN_TTL_SECONDS:-3600}
+      REFRESH_TOKEN_TTL_DAYS: ${REFRESH_TOKEN_TTL_DAYS:-30}
+      MAX_UPLOAD_BYTES: 5368709120
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:5173/connected-accounts/google/callback}
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+      # Rate limits and client IP (see backend/src/config/env.ts). Set TRUST_PROXY behind a reverse proxy.
+      TRUST_PROXY: ${TRUST_PROXY:-}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-2000}
+      RATE_LIMIT_WINDOW_MINUTES: ${RATE_LIMIT_WINDOW_MINUTES:-15}
+      INITIAL_USER_NAME: ${INITIAL_USER_NAME:-}
+      INITIAL_USER_EMAIL: ${INITIAL_USER_EMAIL:-}
+      INITIAL_USER_PASSWORD: ${INITIAL_USER_PASSWORD:-}
+    ports:
+      - "${PORT:-5173}:4000"
+
+volumes:
+  hcdrive_data:
