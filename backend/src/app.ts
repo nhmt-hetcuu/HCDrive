@@ -19,6 +19,7 @@ import { publicApiRouter } from './modules/public-api/public-api.routes.js'
 import { auditLogRouter } from './modules/audit-logs/audit-log.routes.js'
 import { systemRouter } from './modules/system/system.routes.js'
 import { homeRouter } from './modules/home/home.routes.js'
+import { libraryRouter } from './modules/library/library.routes.js'
 
 export const app = express()
 
@@ -86,6 +87,7 @@ apiRouter.use('/invites', inviteRouter)
 apiRouter.use('/audit-logs', auditLogRouter)
 apiRouter.use('/system', systemRouter)
 apiRouter.use('/home', homeRouter)
+apiRouter.use('/library', libraryRouter)
 // publicApiRouter defines /v1/uploads itself, so it is mounted without a prefix.
 apiRouter.use(publicApiRouter)
 

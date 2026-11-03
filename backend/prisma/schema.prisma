@@ -36,6 +36,7 @@ model User {
   workspaceInvitesSent WorkspaceInvite[]  @relation("WorkspaceInvitesSent")
   uploadRoutingPolicy  UploadRoutingPolicy?
   apiKeys              ApiKey[]
+  savedLinks           SavedLink[]
 
   @@map("users")
 }
@@ -191,6 +192,7 @@ model ConnectedAccount {
   folders               Folder[]
   uploadSessions        UploadSession[]
   s3StorageConfig       S3StorageConfig?
+  savedLinks            SavedLink[]
 
   @@unique([userId, provider, providerAccountId])
   @@index([userId])
@@ -396,4 +398,47 @@ model SystemSetting {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("system_settings")
+}
+
+/// A Drive link someone else shared with the user (a course, lesson folder, document), kept in the
+/// user's library so it is easy to find again. Opened through one of the user's own Google accounts.
+model SavedLink {
+  id                 String              @id @default(uuid())
+  userId             String              @map("user_id")
+  /// The user's Google account that can open the link. Null when that account was removed; the next open finds another one.
+  connectedAccountId String?             @map("connected_account_id")
+  driveFileId        String              @map("drive_file_id")
+  resourceKey        String?             @map("resource_key")
+  url                String
+  title              String
+  mimeType           String              @map("mime_type")
+  ownerName          String?             @map("owner_name")
+  ownerEmail         String?             @map("owner_email")
+  /// Course or group name the user files it under ("" = not grouped).
+  collection         String              @default("")
+  note               String              @default("")
+  lastOpenedAt       DateTime?           @map("last_opened_at")
+  createdAt          DateTime            @default(now()) @map("created_at")
+  updatedAt          DateTime            @updatedAt @map("updated_at")
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  connectedAccount   ConnectedAccount?   @relation(fields: [connectedAccountId], references: [id], onDelete: SetNull)
+  progress           SavedLinkProgress[]
+
+  @@unique([userId, driveFileId])
+  @@index([userId, collection])
+  @@map("saved_links")
+}
+
+/// Per-lesson progress inside a saved link: done or not, and where a video was left off.
+model SavedLinkProgress {
+  id              String    @id @default(uuid())
+  savedLinkId     String    @map("saved_link_id")
+  driveFileId     String    @map("drive_file_id")
+  completedAt     DateTime? @map("completed_at")
+  positionSeconds Int       @default(0) @map("position_seconds")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  savedLink       SavedLink @relation(fields: [savedLinkId], references: [id], onDelete: Cascade)
+
+  @@unique([savedLinkId, driveFileId])
+  @@map("saved_link_progress")
 }

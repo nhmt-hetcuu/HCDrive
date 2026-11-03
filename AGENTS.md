@@ -231,6 +231,16 @@ Invites:
 - `POST /invites`
 - `DELETE /invites/:id`
 
+Library (links others shared with the user, e.g. bought courses):
+- `GET /library`
+- `POST /library` (`url`, or `fileId` + `accountId` from Shared with me)
+- `PATCH /library/:id`
+- `DELETE /library/:id`
+- `POST /library/collections/rename`
+- `GET /library/:id/items?folderId=<id>`
+- `PUT /library/:id/progress`
+- `GET /library/stream/:token` (signed, no auth header; only for files the owner allows downloading)
+
 Public shared files:
 - `GET /public/files/:token`
 - `GET /public/files/:token/download`

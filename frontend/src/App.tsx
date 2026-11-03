@@ -11,6 +11,7 @@ import { RecentPage } from '@/pages/RecentPage'
 import { RegisterPage } from '@/pages/RegisterPage'
 import { SettingsPage } from '@/pages/SettingsPage'
 import { SharedPage } from '@/pages/SharedPage'
+import { LibraryPage } from '@/pages/LibraryPage'
 import { StarredPage } from '@/pages/StarredPage'
 import { PublicFilePage } from '@/pages/PublicFilePage'
 import { TrashPage } from '@/pages/TrashPage'
@@ -44,6 +45,7 @@ function App() {
                 <Route path="storage" element={<QuotaTrackerPage />} />
                 <Route path="quota" element={<Navigate to="/storage" replace />} />
                 <Route path="shared" element={<SharedPage />} />
+                <Route path="library" element={<LibraryPage />} />
                 <Route path="recent" element={<RecentPage />} />
                 <Route path="starred" element={<StarredPage />} />
                 <Route path="archived" element={<Navigate to="/trash" replace />} />
