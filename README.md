@@ -1,393 +1,376 @@
-# HCDrive
+<p align="center">
+  <img src="frontend/public/pwa-512x512.svg" alt="HCDrive" width="88" height="88" />
+</p>
+
+<h1 align="center">HCDrive</h1>
 
 <p align="center">
-  <b>Tất cả dung lượng đám mây của bạn, gộp trong một giao diện Google Drive 2024 chuẩn mực.</b><br />
-  Kết nối nhiều tài khoản Google Drive và bucket S3 thành một ổ đĩa ảo dung lượng lớn duy nhất, hỗ trợ truyền phát trực tiếp (streaming), định tuyến tải lên thông minh và hoàn toàn không tốn dung lượng ổ cứng máy chủ.
+  Cổng lưu trữ đám mây tự triển khai: gộp nhiều tài khoản Google Drive và bucket S3 thành một ổ đĩa duy nhất,<br />
+  truyền dữ liệu trực tiếp qua máy chủ mà không ghi tệp xuống ổ cứng.
 </p>
 
 <p align="center">
-  <img alt="Giấy phép: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-4f46e5" />
+  <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-2563eb" /></a>
   <img alt="Node.js 20+" src="https://img.shields.io/badge/node-20%2B-339933?logo=node.js&logoColor=white" />
-  <img alt="React 19" src="https://img.shields.io/badge/react-19-61DAFB?logo=react&logoColor=white" />
-  <img alt="Tailwind CSS 4" src="https://img.shields.io/badge/tailwind-4-38B2AC?logo=tailwindcss&logoColor=white" />
-  <img alt="Sẵn sàng cho Docker" src="https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white" />
+  <img alt="React 19" src="https://img.shields.io/badge/react-19-61DAFB?logo=react&logoColor=black" />
+  <img alt="Express 5" src="https://img.shields.io/badge/express-5-000000?logo=express&logoColor=white" />
+  <img alt="Docker" src="https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white" />
+</p>
+
+<p align="center">
+  <a href="#bắt-đầu-nhanh">Bắt đầu nhanh</a> ·
+  <a href="#tính-năng">Tính năng</a> ·
+  <a href="#cấu-hình">Cấu hình</a> ·
+  <a href="#kiến-trúc">Kiến trúc</a> ·
+  <a href="#api">API</a> ·
+  <a href="#xử-lý-sự-cố">Xử lý sự cố</a>
 </p>
 
 ---
 
-## 📖 Mục lục
+## Giới thiệu
 
-1. [HCDrive là gì & Tại sao nên dùng?](#1-hcdrive-là-gì--tại-sao-nên-dùng)
-2. [Các tính năng nổi bật](#2-các-tính-năng-nổi-bật)
-3. [Giao diện chuẩn Google Drive 2024 (Material You)](#3-giao-diện-chuẩn-google-drive-2024-material-you)
-4. [Cơ chế chọn nhiều tệp & Quản lý thư mục](#4-cơ-chế-chọn-nhiều-tệp--quản-lý-thư-mục)
-5. [Kiến trúc hệ thống & Cơ chế Streaming](#5-kiến-trúc-hệ-thống--cơ-chế-streaming)
-6. [Chạy nhanh bằng Docker (Khuyên dùng)](#6-chạy-nhanh-bằng-docker-khuyên-dùng)
-7. [Cài đặt thủ công & Phát triển cục bộ](#7-cài-đặt-thủ-công--phát-triển-cục-bộ)
-8. [Hướng dẫn cấu hình Google Cloud OAuth](#8-hướng-dẫn-cấu-hình-google-cloud-oauth)
-9. [Biến môi trường (.env)](#9-biến-môi-trường-env)
-10. [Danh mục API RESTful](#10-danh-mục-api-restful)
-11. [Bảo mật & An toàn dữ liệu](#11-bảo-mật--an-toàn-dữ-liệu)
-12. [Xử lý sự cố thường gặp (Troubleshooting)](#12-xử-lý-sự-cố-thường-gặp-troubleshooting)
-13. [💖 Ủng hộ dự án (Donate)](#13-ủng-hộ-dự-án-donate)
+Mỗi tài khoản Google miễn phí có 15 GB. Khi dùng nhiều tài khoản, dữ liệu bị chia nhỏ: tài khoản này đầy trong khi tài khoản khác còn trống, và phải đăng nhập qua lại để tìm tệp.
 
----
+**HCDrive** (trước đây là 9Drive) giải quyết việc đó bằng một máy chủ bạn tự chạy:
 
-## 1. HCDrive là gì & Tại sao nên dùng?
+- **Một ổ đĩa cho mọi tài khoản.** Các tài khoản Google Drive và bucket S3 hiện chung trong "Drive của tôi"; thư mục cùng tên ở nhiều tài khoản được gộp thành một.
+- **Không lưu tệp trên máy chủ.** Tải lên và tải xuống đi thẳng giữa trình duyệt và Google Drive / S3; máy chủ chỉ giữ thông tin tệp (tên, vị trí, kích thước).
+- **Tự chọn chỗ lưu.** Tệp mới được đưa vào tài khoản còn nhiều chỗ nhất, lần lượt từng tài khoản, hoặc theo thứ tự ưu tiên bạn đặt.
+- **Giao diện quen thuộc.** Thiết kế theo phong cách Material You, có chế độ sáng / tối, tiếng Việt và tiếng Anh, cài được như ứng dụng (PWA).
 
-Mỗi tài khoản Google cá nhân miễn phí được cấp 15 GB dung lượng. Khi bạn sở hữu nhiều tài khoản, dữ liệu bị phân mảnh, khó quản lý và tài khoản này đầy trong khi tài khoản khác còn trống.
+## Tính năng
 
-**HCDrive** (tiền thân là 9Drive) đóng vai trò là một **cổng lưu trữ đám mây (Cloud Storage Gateway)** tự lưu trữ (self-hosted):
-- 📦 **Một kho lưu trữ hợp nhất**: Gộp toàn bộ tài khoản Google Drive cá nhân và các bucket tương thích S3 thành một ổ đĩa ảo dung lượng lớn.
-- 📂 **Gộp "Drive của tôi"**: Tự động gộp các thư mục gốc và cây thư mục của tất cả tài khoản theo đường dẫn tên, mang lại trải nghiệm như đang dùng một tài khoản duy nhất.
-- ⚡ **Truyền phát trực tiếp (Zero Disk Storage)**: Tệp tải lên hoặc tải xuống được stream trực tiếp qua backend tới Google Drive / S3. **Máy chủ hoàn toàn không lưu trữ tệp tạm trên ổ cứng.**
-- 🧭 **Định tuyến thông minh**: Khi tải tệp lên, hệ thống tự động chọn tài khoản còn nhiều dung lượng trống nhất, chia đều (round-robin) hoặc theo thứ tự ưu tiên bạn cài đặt.
-- 🎨 **Giao diện chuẩn Google Drive 2024**: Thiết kế hiện đại theo ngôn ngữ Material You của Google Drive (thanh tìm kiếm dạng viên thuốc, thanh chip lọc popover, bảng danh sách/lưới, bảng chi tiết bên phải, chế độ sáng/tối tự động).
+### Lưu trữ
 
----
+| | |
+|---|---|
+| **Nhiều nguồn lưu trữ** | Không giới hạn số tài khoản Google Drive; mọi dịch vụ tương thích S3 (Cloudflare R2, AWS S3, MinIO, Wasabi, Backblaze B2…). |
+| **Theo dõi dung lượng** | Tổng dung lượng toàn hệ thống và chi tiết từng tài khoản, đồng bộ định kỳ. |
+| **Phân bổ tải lên** | Ba chế độ: nhiều chỗ trống nhất, xoay vòng, theo thứ tự ưu tiên. Tài khoản hết chỗ hoặc đang bị Google giới hạn request được bỏ qua. |
+| **Đồng bộ với Google Drive** | Dùng Changes API: chỉ hỏi Google những gì đã đổi, giảm số request và tránh lỗi "Quota exceeded". |
+| **Chuyển tài khoản** | Xuất / nhập token tài khoản lưu trữ dưới dạng JSON để chuyển sang máy chủ khác. |
 
-## 2. Các tính năng nổi bật
+### Tệp và thư mục
 
-### Lưu trữ & Tích hợp đa nền tảng
-- **Google Drive không giới hạn**: Thêm bao nhiêu tài khoản Google Drive tùy thích.
-- **Tương thích S3**: Kết nối Cloudflare R2, AWS S3, MinIO, Wasabi, Backblaze B2 hoặc bất kỳ endpoint S3 nào.
-- **Theo dõi dung lượng (Quota Tracker)**: Xem tổng dung lượng đã dùng / còn trống trên toàn hệ thống và biểu đồ chi tiết từng tài khoản.
+- Tải lên tệp và cả thư mục (giữ nguyên cây thư mục con), tải lên tiếp tục được khi mạng chập chờn.
+- Tải xuống thư mục hoặc nhiều tệp thành một file ZIP, nén trực tiếp trong lúc truyền.
+- Chọn nhiều tệp (Shift / Ctrl + nhấp), thao tác hàng loạt: di chuyển, gắn dấu sao, xoá, khôi phục.
+- Xem trước ảnh, video, âm thanh, PDF, văn bản và tệp Office ngay trong trình duyệt.
+- Tìm kiếm theo tên và theo nội dung tệp (full-text của Google Drive), lọc theo loại, tài khoản, ngày sửa, dung lượng.
+- Thùng rác, gắn dấu sao, tệp gần đây.
 
-### Quản lý tệp & Thư mục thông minh
-- **Tải lên cả thư mục (`webkitdirectory`)**: Chọn một thư mục từ máy tính, HCDrive tự động phân tích cây thư mục con và tạo cấu trúc thư mục ảo tương ứng trên hệ thống.
-- **Tải xuống thư mục nén ZIP (`archiver`)**: Cho phép tải xuống toàn bộ thư mục và các cấp con dưới dạng file `.zip` nén trực tiếp qua HTTP stream mà không tốn tài nguyên ổ đĩa máy chủ.
-- **Thao tác hàng loạt (Batch Actions)**: Chọn nhiều tệp cùng lúc để tải xuống file ZIP gộp, di chuyển thư mục, gắn dấu sao, đưa vào thùng rác hoặc xóa vĩnh viễn.
-- **Menu ngữ cảnh đầy đủ**: Nhấp chuột phải vào tệp, thư mục hoặc khoảng trống để thực hiện nhanh các tác vụ: Xem trước, Tải xuống, Đổi tên, Di chuyển, Chia sẻ, Mời, Xóa.
+### Tính năng của Google Drive
 
-### Chia sẻ & Cộng tác
-- **Link chia sẻ công khai**: Tạo liên kết chia sẻ tệp với mật khẩu bảo vệ hoặc giới hạn thời gian. Tích hợp sẵn trình xem trực tiếp: ảnh, video (trình phát Plyr), PDF, văn bản và file Office.
-- **Mời người dùng**: Phân quyền Xem (Viewer) hoặc Chỉnh sửa (Editor) cho các tài khoản khác trong hệ thống.
-- **Nhật ký hoạt động (Audit Logs)**: Theo dõi toàn bộ lịch sử tải lên, đổi tên, xóa, chia sẻ và đăng nhập.
+Tạo Google Docs / Sheets / Slides / Forms, xuất sang nhiều định dạng, tạo bản sao, lối tắt, bình luận, quản lý phiên bản, khoá tệp, chuyển quyền sở hữu, đặt hạn truy cập, chặn tải xuống, dọn thùng rác Google, tự chuyển tệp Office thành Google Docs khi tải lên.
 
-### Dành cho nhà phát triển (Developer API)
-- **API tải lên bên ngoài**: Tuyến đường `POST /api/v1/uploads` sử dụng API Key (`9d_live_...`) cho phép tích hợp tự động hóa từ kịch bản lệnh (scripts), GitHub Actions, hoặc ứng dụng bên thứ ba.
+### Chia sẻ
 
----
+- Link chia sẻ công khai (có thể đặt hạn) kèm trang xem trước và chế độ nhúng.
+- Chia sẻ trực tiếp với email qua quyền của Google Drive.
+- Mời người dùng khác trong HCDrive xem hoặc chỉnh sửa.
 
-## 3. Giao diện chuẩn Google Drive 2024 (Material You)
+### Khóa học
 
-Giao diện frontend được xây dựng bằng **React 19** và **Tailwind CSS 4**, tái hiện chuẩn xác từng chi tiết của Google Drive phiên bản 2024:
+Mục **Khóa học** quản lý các link Google Drive người khác chia sẻ riêng cho email của bạn (khóa học đã mua, thư mục bài giảng, tài liệu):
 
-### Hệ thống biến CSS Tokens (`frontend/src/style.css`)
-Hệ thống token tự động đồng bộ màu sắc giữa chế độ Sáng (Light) và Tối (Dark):
+- Xếp theo khóa, ghi tên giảng viên và ghi chú.
+- Danh sách bài theo đúng thứ tự số; video phát ngay trong HCDrive và nhớ vị trí đang xem; đánh dấu bài đã học.
+- Tải cả khóa hoặc từng chương thành ZIP, hoặc chép thật toàn bộ khóa vào Drive của bạn.
+- Link chia sẻ nội bộ để người dùng HCDrive khác thêm khóa vào thư viện của họ.
 
-| Biến CSS Token | Chế độ Sáng | Chế độ Tối | Mục đích sử dụng |
-|---|---|---|---|
-| `--gd-page` | `#f8fafd` | `#131314` | Màu nền ngoài cùng toàn trang |
-| `--gd-surface` | `#ffffff` | `#1e1f20` | Khung nội dung chính, thẻ card, menu popover |
-| `--gd-surface-2` | `#f0f4f9` | `#282a2c` | Khối thư mục, thẻ tệp, trạng thái hover |
-| `--gd-search` | `#e9eef6` | `#282a2c` | Ô tìm kiếm dạng viên thuốc ở đầu trang |
-| `--gd-nav-active` | `#c2e7ff` | `#004a77` | Viên thuốc menu điều hướng đang chọn |
-| `--gd-primary` | `#0b57d0` | `#a8c7fa` | Nút hành động chính, viền focus, checkbox |
-| `--gd-selected` | `#c2e7ff` | `#004a77` | Hàng hoặc thẻ tệp đang được chọn |
-| `--gd-text` | `#1f1f1f` | `#e3e3e3` | Màu chữ chính |
-| `--gd-text-2` | `#444746` | `#c4c7c5` | Màu chữ phụ, nhãn, biểu tượng |
+HCDrive tôn trọng quyền mà người chia sẻ đặt ra: người xem dùng tài khoản Google của chính họ, tệp bị chặn tải xuống hoặc chặn sao chép sẽ không được tải hay chép.
 
-### Các thành phần giao diện chính
-- **`DriveToolbar`**: Tiêu đề "Drive của tôi ▾" mở nhanh menu tác vụ (Tạo thư mục, Tải tệp, Tải thư mục, Tạo tài liệu Docs/Sheets), đường dẫn breadcrumb, chuyển đổi Danh sách/Lưới, và nút xem chi tiết.
-- **`FilterChips`**: Thanh chip lọc nhanh (**Loại**, **Tài khoản**, **Lần sửa đổi**, **Dung lượng**). Toàn bộ menu popover được đưa ra `document.body` qua `createPortal` với toạ độ cố định và `z-[9999]`, loại bỏ hoàn toàn lỗi bị che khuất bởi vùng cuộn.
-- **`DetailsPanel`**: Khung trượt bên phải hiển thị ảnh thu nhỏ, thông số chi tiết (loại tệp, kích thước, tài khoản lưu trữ, vị trí, ngày sửa) và lịch sử hoạt động.
-- **`UserAccountMenu`**: Menu tài khoản ở góc phải đồng bộ ảnh đại diện (avatar), dung lượng sử dụng và thông tin cá nhân.
+### Quản trị và bảo mật
 
----
+- Đăng nhập bằng email / mật khẩu hoặc Google; liên kết thêm đăng nhập Google cho tài khoản email.
+- Quản lý phiên đăng nhập trên từng thiết bị, đăng xuất từ xa.
+- Captcha cho đăng ký và đăng nhập: **Google reCAPTCHA v2** hoặc **Cloudflare Turnstile**, cấu hình trong giao diện.
+- Tự nhận diện **Cloudflare** và **reverse proxy** (nginx, Docker) để lấy đúng IP người dùng.
+- Giới hạn tần suất request, chống truy cập chéo dữ liệu (IDOR), nhật ký hoạt động.
+- Quản lý người dùng, bật / tắt đăng ký, sao lưu và khôi phục cơ sở dữ liệu.
+- Khoá API theo phạm vi quyền cho tích hợp bên ngoài.
 
-## 4. Cơ chế chọn nhiều tệp & Quản lý thư mục
+## Bắt đầu nhanh
 
-### Chọn độc lập (Multi-File Toggle)
-- **Chế độ Danh sách (`DriveListView`)**: Checkbox trên từng hàng được thiết kế độc lập. Khi tick chọn hoặc bỏ tick một tệp, hệ thống chỉ cập nhật trạng thái của riêng tệp đó mà không làm mất danh sách các tệp đã chọn trước đó.
-- **Chế độ Lưới (`DriveGridView`)**:
-  - Trạng thái bình thường: Hiển thị icon định dạng tệp; khi rê chuột vào thẻ sẽ hiển thị nút tròn checkmark.
-  - Khi tệp được chọn: Nút checkmark chuyển sang màu xanh dương đậm `#0b57d0` với biểu tượng check trắng.
-  - Khi có ít nhất 1 tệp đang chọn trong trang: Tất cả các thẻ tệp còn lại đều tự động hiển thị viền tròn checkbox để bấm chọn tiếp một cách nhanh chóng.
-- **Chọn dải (Shift + Click)**: Giữ phím `Shift` và nhấp chuột vào tệp đích để chọn toàn bộ dải tệp từ vị trí chọn gần nhất đến tệp hiện tại.
-- **Đảo chọn từng tệp (Ctrl / Cmd + Click)**: Thêm hoặc bớt từng tệp riêng lẻ vào tập hợp đã chọn.
-- **Thanh công cụ lựa chọn nổi (`SelectionBar`)**: Hiển thị số lượng tệp đã chọn cùng các nút bấm nhanh: Tải xuống file ZIP, Di chuyển, Gắn dấu sao, Xóa vào thùng rác hoặc Bỏ chọn.
+Cách được khuyên dùng là Docker: một container chứa cả frontend, backend và cơ sở dữ liệu SQLite, chạy trên một cổng.
 
----
+**Yêu cầu:** Docker và Docker Compose.
 
-## 5. Kiến trúc hệ thống & Cơ chế Streaming
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      Trình duyệt Client                     │
-│         React 19 + Vite 8 + Tailwind CSS 4 + Lucide         │
-└──────────────────────────────┬──────────────────────────────┘
-                               │ HTTPS / JSON / Multipart
-┌──────────────────────────────▼──────────────────────────────┐
-│                    HCDrive Express 5 Backend                │
-│ ┌─────────────────────────────────────────────────────────┐ │
-│ │ Middleware xác thực (JWT Bearer / Scoped API Key)       │ │
-│ ├─────────────────────────────────────────────────────────┤ │
-│ │ Bộ định tuyến hệ thống tệp ảo (Folders, Files, Uploads) │ │
-│ ├─────────────────────────────────────────────────────────┤ │
-│ │ Công cụ định tuyến tải lên (Quota Sync, Policy Engine)  │ │
-│ ├─────────────────────────────────────────────────────────┤ │
-│ │ Cổng truyền phát Streaming (Undici HTTP / AWS S3 Lib)   │ │
-│ └────────────────────────────┬────────────────────────────┘ │
-│                              │                              │
-│   Prisma ORM (MySQL/SQLite)  │  Thông tin xác thực mã hoá   │
-│   Metadata & Thư mục ảo      │  Token AES-256, Hash Argon2  │
-└──────────────┬───────────────┴───────────────┬──────────────┘
-               │                               │
-        Chunked Stream                  Chunked Stream
-               │                               │
-┌──────────────▼──────────────┐ ┌──────────────▼──────────────┐
-│   Google Drive API v3       │ │   Lưu trữ chuẩn S3          │
-│   (Tài khoản 1, 2, 3...)    │ │   (R2, MinIO, AWS, B2...)   │
-└─────────────────────────────┘ └─────────────────────────────┘
-```
-
-### Nguyên lý Ảo hóa và Không lưu đĩa (Zero Disk Usage)
-1. **Thư mục ảo**: Cấu trúc cây thư mục chỉ lưu trong cơ sở dữ liệu (`Folder.parentId`). Trên Google Drive, tất cả tệp nằm phẳng trong thư mục ứng dụng gốc (`9drive`).
-2. **Không ghi tệp tạm lên máy chủ**: Khi người dùng tải tệp lên hoặc tải tệp xuống, dữ liệu được truyền thẳng (stream) qua luồng HTTP chunking giữa client và Google Drive/S3. Máy chủ không cần dung lượng ổ cứng lớn để đệm tệp.
-
----
-
-## 6. Chạy nhanh bằng Docker (Khuyên dùng)
-
-Dự án cung cấp cấu hình **All-in-One** tích hợp cả Frontend, Backend và Cơ sở dữ liệu SQLite trong một container duy nhất, chạy trên 1 cổng duy nhất, tương thích hoàn hảo với Cloudflare Proxy và Nginx.
-
-### 1. Tải mã nguồn & Chuẩn bị biến môi trường
 ```bash
-git clone https://github.com/zenhosta/9drive.git hcdrive
-cd hcdrive
-cp .env.example .env
+git clone https://github.com/nhmt-hetcuu/HCDrive.git
+cd HCDrive
+cp .env.docker.example .env
 ```
 
-### 2. Cấu hình tệp `.env`
-Mở tệp `.env` và đặt hai chuỗi ngẫu nhiên dài từ 32 ký tự trở lên cho `JWT_ACCESS_SECRET` và `TOKEN_ENCRYPTION_KEY`:
+Mở `.env` và đổi tối thiểu các giá trị sau:
+
 ```env
-FRONTEND_URL="http://localhost:5173"
-JWT_ACCESS_SECRET="chuoi-ngau-nhien-jwt-it-nhat-32-ky-tu"
-TOKEN_ENCRYPTION_KEY="chuoi-ngau-nhien-aes-dung-32-ky-tu!"
-
-# Cấu hình Google OAuth (có thể điền sau qua giao diện Cài đặt)
-GOOGLE_CLIENT_ID=""
-GOOGLE_CLIENT_SECRET=""
+FRONTEND_URL=http://localhost:5173        # địa chỉ bạn mở HCDrive, ví dụ https://drive.example.com
+JWT_ACCESS_SECRET=<chuỗi ngẫu nhiên, tối thiểu 32 ký tự>
+TOKEN_ENCRYPTION_KEY=<chuỗi ngẫu nhiên, tối thiểu 32 ký tự>
+INITIAL_USER_EMAIL=admin@example.com      # tài khoản quản trị tạo lần đầu
+INITIAL_USER_PASSWORD=<mật khẩu mạnh>
 ```
 
-### 3. Khởi chạy
+Tạo chuỗi ngẫu nhiên:
+
+```bash
+openssl rand -base64 48
+```
+
+Khởi chạy:
+
 ```bash
 docker compose up -d --build
 ```
-Mở trình duyệt tại địa chỉ **http://localhost:5173** và tiến hành tạo tài khoản quản trị đầu tiên! 🎉
 
-### Các lệnh Docker thông dụng
+Mở **http://localhost:5173** và đăng nhập bằng tài khoản quản trị vừa đặt. Cơ sở dữ liệu nằm trong volume `hcdrive_data`; bảng mới được tạo tự động mỗi lần khởi động.
+
+> [!IMPORTANT]
+> Không dùng giá trị mặc định của `JWT_ACCESS_SECRET`, `TOKEN_ENCRYPTION_KEY` và `INITIAL_USER_PASSWORD` khi chạy thật. Đổi `TOKEN_ENCRYPTION_KEY` sau khi đã kết nối tài khoản sẽ làm các token đã lưu không giải mã được.
+
+### Lệnh thường dùng
+
 ```bash
-# Xem log hệ thống
-docker compose logs -f 9drive
-
-# Khởi động lại container
-docker compose restart 9drive
-
-# Dừng container
-docker compose down
-
-# Nạp lại cấu hình Google OAuth từ tệp .env vào cơ sở dữ liệu
-docker compose exec 9drive npm run seed:google-config
+docker compose logs -f hcdrive      # xem log
+docker compose restart hcdrive      # khởi động lại
+docker compose up -d --build        # cập nhật sau khi git pull
+docker compose down                 # dừng (dữ liệu vẫn còn trong volume)
 ```
 
----
+## Cấu hình
 
-## 7. Cài đặt thủ công & Phát triển cục bộ
+### Biến môi trường
 
-### Yêu cầu hệ thống
-- **Node.js 20+** và **npm**
-- **MySQL 8+** (hoặc SQLite)
-
-### Cách 1: Chạy kịch bản tự động
-```bash
-# Trên Linux hoặc macOS
-bash ./setup.sh
-
-# Trên Windows (PowerShell)
-powershell -ExecutionPolicy Bypass -File .\setup.ps1
-```
-
-### Cách 2: Thiết lập thủ công từng phần
-```bash
-# Khởi tạo Backend
-cd backend
-npm install
-npx prisma generate
-npm run prisma:migrate
-npm run dev # Chạy tại http://localhost:4000
-
-# Khởi tạo Frontend (mở terminal mới)
-cd ../frontend
-npm install
-npm run dev # Chạy tại http://localhost:5173
-```
-
----
-
-## 8. Hướng dẫn cấu hình Google Cloud OAuth
-
-Để kết nối Google Drive và đăng nhập bằng tài khoản Google, bạn cần tạo OAuth Client ID miễn phí từ Google Cloud Console (khoảng 5–10 phút):
-
-1. **Tạo Project**: Truy cập [Google Cloud Console](https://console.cloud.google.com/) và tạo một dự án mới.
-2. **Bật Google Drive API**: Vào mục **APIs & Services → Library**, tìm kiếm **Google Drive API** và bấm **Enable**.
-3. **Cấu hình màn hình đồng thuận OAuth (OAuth consent screen)**:
-   - User Type: Chọn **External**.
-   - Điền tên ứng dụng, email hỗ trợ và email nhà phát triển.
-   - Thêm các phạm vi quyền (Scopes):
-     ```txt
-     https://www.googleapis.com/auth/drive
-     https://www.googleapis.com/auth/userinfo.email
-     https://www.googleapis.com/auth/userinfo.profile
-     ```
-   - Trong giai đoạn thử nghiệm (**Testing**), thêm các tài khoản Gmail bạn dự định kết nối vào danh sách **Test users**.
-4. **Tạo thông tin xác thực OAuth Client ID**:
-   - Loại ứng dụng: **Web application**.
-   - **Authorized JavaScript origins**: `http://localhost:5173` (hoặc tên miền frontend của bạn).
-   - **Authorized redirect URIs**: `http://localhost:4000/connected-accounts/google/callback` (hoặc tên miền backend của bạn).
-   - Lưu lại **Client ID** và **Client Secret**.
-5. **Lưu cấu hình vào HCDrive**:
-   - Đăng nhập vào HCDrive → Vào **Cài đặt (Settings)** → **Thông tin xác thực Google** → Dán Client ID, Client Secret và bấm **Lưu cấu hình**.
-
----
-
-## 9. Biến môi trường (.env)
-
-### Backend (`backend/.env`)
-| Tên biến | Giải thích | Mặc định |
+| Biến | Mô tả | Mặc định |
 |---|---|---|
-| `DATABASE_URL` | Chuỗi kết nối CSDL (MySQL hoặc SQLite) | `mysql://...` hoặc `file:...` |
-| `APP_PORT` | Cổng máy chủ backend lắng nghe | `4000` |
-| `FRONTEND_URL` | Tên miền frontend được phép gọi API qua CORS | `http://localhost:5173` |
-| `JWT_ACCESS_SECRET` | Khóa bí mật ký JWT access token (tối thiểu 32 ký tự) | — |
-| `TOKEN_ENCRYPTION_KEY` | Khóa mã hóa AES-256 các token tài khoản (đúng 32 ký tự) | — |
-| `ACCESS_TOKEN_TTL_SECONDS` | Thời gian sống của access token (giây) | `3600` (1 giờ) |
-| `REFRESH_TOKEN_TTL_DAYS` | Thời gian sống của refresh token (ngày) | `30` |
-| `MAX_UPLOAD_BYTES` | Giới hạn dung lượng tối đa cho 1 tệp tải lên (bytes) | `5368709120` (5 GB) |
-| `RECAPTCHA_SECRET_KEY` | Khóa bí mật Google reCAPTCHA (tùy chọn) | `""` |
+| `PORT` | Cổng trên máy chủ được ánh xạ vào container | `5173` |
+| `FRONTEND_URL` | Địa chỉ người dùng mở HCDrive; dùng cho CORS và link chuyển hướng | `http://localhost:5173` |
+| `DATABASE_URL` | Đường dẫn SQLite | `file:/app/data/hcdrive.db` |
+| `JWT_ACCESS_SECRET` | Khoá ký access token, tối thiểu 32 ký tự | — |
+| `TOKEN_ENCRYPTION_KEY` | Khoá mã hoá token Google và khoá S3, tối thiểu 32 ký tự | — |
+| `ACCESS_TOKEN_TTL_SECONDS` | Thời hạn access token (giây) | `3600` |
+| `REFRESH_TOKEN_TTL_DAYS` | Thời hạn phiên đăng nhập (ngày) | `30` |
+| `MAX_UPLOAD_BYTES` | Dung lượng tối đa một tệp tải lên | `5368709120` (5 GB) |
+| `ADMIN_EMAILS` | Email quản trị, phân cách bằng dấu phẩy; để trống thì người đăng ký đầu tiên là quản trị | — |
+| `INITIAL_USER_NAME` / `_EMAIL` / `_PASSWORD` | Tạo sẵn tài khoản đầu tiên khi cơ sở dữ liệu còn trống | — |
+| `GOOGLE_CLIENT_ID` / `_SECRET` / `_REDIRECT_URI` | OAuth client riêng (có thể nhập sau trong Cài đặt) | — |
+| `TRUST_PROXY` | Để trống: tự nhận diện Cloudflare / nginx. Đặt `false` để không tin proxy nào | — |
+| `RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW_MINUTES` | Số request API mỗi người dùng trong một khoảng thời gian | `2000` / `15` |
+| `DISABLE_CAPTCHA` | `true` để tắt mọi kiểm tra captcha (khi lỡ nhập sai khoá) | — |
+| `RECAPTCHA_SECRET_KEY` / `RECAPTCHA_SITE_KEY` | Cách cấu hình reCAPTCHA cũ; nên dùng **Cài đặt → Bảo mật** | — |
 
-### Frontend (`frontend/.env`)
-| Tên biến | Giải thích |
+### Kết nối Google Drive
+
+HCDrive có sẵn một OAuth client mặc định để thử ngay. Client này dùng chung hạn mức request với rất nhiều người, nên hay gặp lỗi *"Quota exceeded … Requests per minute"*. Khi dùng thật, hãy tạo OAuth client riêng (khoảng 10 phút):
+
+1. Vào [Google Cloud Console](https://console.cloud.google.com/), tạo project mới.
+2. **APIs & Services → Library**: bật **Google Drive API**.
+3. **OAuth consent screen**: chọn *External*, điền tên ứng dụng và email; thêm các scope:
+   ```text
+   https://www.googleapis.com/auth/drive
+   https://www.googleapis.com/auth/userinfo.email
+   https://www.googleapis.com/auth/userinfo.profile
+   ```
+   Khi ứng dụng còn ở chế độ *Testing*, thêm các Gmail sẽ kết nối vào **Test users**.
+4. **Credentials → Create credentials → OAuth client ID**, loại *Web application*:
+   - *Authorized JavaScript origins*: giá trị `FRONTEND_URL`, ví dụ `https://drive.example.com`.
+   - *Authorized redirect URIs*: `FRONTEND_URL` + `/connected-accounts/google/callback`.
+5. Trong HCDrive: **Cài đặt → Google OAuth**, dán Client ID và Client Secret rồi lưu.
+
+> [!NOTE]
+> Google không chấp nhận redirect URI là địa chỉ IP nội bộ (ví dụ `http://10.0.0.200:5173`). Khi chạy trong mạng LAN không có tên miền, chọn cách **dán mã** trong hộp kết nối tài khoản: đăng nhập Google, sao chép mã hoặc link callback rồi dán vào HCDrive.
+
+### Reverse proxy và Cloudflare
+
+HCDrive tự nhận ra khi chạy sau Cloudflare hoặc một reverse proxy trong mạng nội bộ và chỉ tin header `X-Forwarded-For`, `X-Real-IP`, `CF-Connecting-IP` từ những địa chỉ đó. **Cài đặt → Bảo mật** cho biết HCDrive đã thấy gì và IP của bạn theo HCDrive.
+
+Cấu hình nginx tối thiểu:
+
+```nginx
+server {
+    server_name drive.example.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:5173;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Tải lên / tải xuống tệp lớn: truyền thẳng, không đệm, không giới hạn kích thước
+        proxy_request_buffering off;
+        proxy_buffering off;
+        client_max_body_size 0;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+    }
+}
+```
+
+Nhớ đặt `FRONTEND_URL` thành tên miền công khai (ví dụ `https://drive.example.com`) và khởi động lại container.
+
+### Captcha
+
+**Cài đặt → Bảo mật** (chỉ quản trị viên): chọn Google reCAPTCHA v2 hoặc Cloudflare Turnstile, dán Site key và Secret key, chọn bật khi đăng ký và / hoặc khi đăng nhập. HCDrive yêu cầu giải thử một captcha bằng khoá mới trước khi lưu, nên khoá sai không thể khoá trang đăng nhập. Nếu vẫn bị khoá ngoài, đặt `DISABLE_CAPTCHA=true` rồi khởi động lại.
+
+## Phát triển cục bộ
+
+**Yêu cầu:** Node.js 20 trở lên và npm.
+
+```bash
+# Tạo backend/.env và frontend/.env với khoá ngẫu nhiên, cài dependency
+bash ./setup.sh                                          # Linux / macOS
+powershell -ExecutionPolicy Bypass -File .\setup.ps1     # Windows
+
+# Backend: http://localhost:4000
+cd backend
+npm run prisma:migrate
+npm run dev
+
+# Frontend: http://localhost:5173 (terminal khác)
+cd frontend
+npm run dev
+```
+
+Dự án chưa có bộ test tự động; trước khi gửi thay đổi, chạy kiểm tra kiểu và build:
+
+```bash
+cd backend && npm run build
+cd frontend && npm run build
+```
+
+`AGENTS.md` và `CLAUDE.md` mô tả quy ước code, quy tắc bảo mật và danh sách API chi tiết.
+
+## Kiến trúc
+
+```text
+Trình duyệt ── React 19 · Vite · Tailwind CSS 4 (PWA)
+     │  HTTPS
+     ▼
+HCDrive backend ── Express 5 · TypeScript
+     │  ├─ Xác thực: JWT + phiên, khoá API theo scope, captcha
+     │  ├─ Hệ thống tệp: thư mục gộp nhiều tài khoản, tìm kiếm, chia sẻ, khóa học
+     │  ├─ Phân bổ tải lên: đồng bộ dung lượng, chọn tài khoản, tránh tài khoản bị giới hạn
+     │  └─ Truyền dữ liệu: stream thẳng tới / từ nhà cung cấp, không ghi đĩa
+     │
+     ├─ Prisma + SQLite ── thông tin tệp, thư mục, người dùng; token mã hoá AES, mật khẩu Argon2
+     ├─ Google Drive API v3 ── tài khoản 1, 2, 3…
+     └─ S3 API ── R2, AWS S3, MinIO, B2…
+```
+
+| Thư mục | Nội dung |
 |---|---|
-| `VITE_API_URL` | Địa chỉ backend API (nhúng vào mã lúc build) |
-| `VITE_RECAPTCHA_SITE_KEY` | Site key Google reCAPTCHA v2/v3 (tùy chọn) |
+| `backend/src/modules/` | Route theo tính năng: `auth`, `files`, `folders`, `uploads`, `storage`, `google`, `s3`, `library`, `system`… |
+| `backend/src/middleware/` | Xác thực, quyền quản trị, giới hạn tần suất, kiểm tra quyền sở hữu |
+| `backend/src/utils/` | Mã hoá, captcha, nhận diện IP, URL ký, xử lý giới hạn request của Google |
+| `backend/prisma/schema.prisma` | Lược đồ cơ sở dữ liệu |
+| `frontend/src/pages/` | Các trang: Drive của tôi, Khóa học, Tài khoản lưu trữ, Cài đặt… |
+| `frontend/src/components/` | Thành phần giao diện dùng chung |
 
----
+## API
 
-## 10. Danh mục API RESTful
+Tài liệu API đầy đủ có sẵn trong ứng dụng tại **`/api`**. Các route cần đăng nhập nhận header `Authorization: Bearer <accessToken>`.
 
-Các API yêu cầu đăng nhập cần truyền header: `Authorization: Bearer <accessToken>`.
+| Nhóm | Route chính |
+|---|---|
+| Xác thực | `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `GET /auth/me` |
+| Tài khoản lưu trữ | `GET /connected-accounts`, `POST /connected-accounts/s3`, `GET /storage/summary`, `PATCH /storage/routing-policy` |
+| Thư mục | `GET /folders`, `POST /folders`, `PATCH /folders/:id`, `GET /folders/:id/download` |
+| Tệp | `GET /files`, `GET /files/:id/download`, `PATCH /files/:id`, `POST /files/batch-download` |
+| Tải lên | `POST /uploads`, `POST /uploads/resumable/init` |
+| Khóa học | `GET /library`, `POST /library`, `GET /library/:id/items` |
+| Tích hợp ngoài | `POST /api/v1/uploads` (khoá API có scope `files:upload`) |
 
-### Xác thực & Người dùng (Auth)
-- `POST /auth/register` — Đăng ký tài khoản mới bằng email và mật khẩu.
-- `POST /auth/login` — Đăng nhập hệ thống.
-- `GET /auth/google/url` — Lấy liên kết chuyển hướng đăng nhập bằng Google.
-- `GET /auth/google/callback` — Xử lý phản hồi OAuth từ Google.
-- `POST /auth/google/exchange` — Đổi mã xác thực tạm thời lấy phiên làm việc JWT.
-- `POST /auth/refresh` — Làm mới access token bằng refresh token.
-- `POST /auth/logout` — Đăng xuất và vô hiệu hóa phiên.
-- `GET /auth/me` — Lấy thông tin tài khoản đang đăng nhập.
+Ví dụ tải tệp lên bằng khoá API (tạo khoá trong **Cài đặt → Khoá API**):
 
-### Tài khoản lưu trữ (Connected Accounts & Storage)
-- `GET /connected-accounts` — Danh sách các tài khoản Google Drive và S3 đã kết nối.
-- `GET /connected-accounts/google/connect-url` — Lấy URL liên kết thêm tài khoản Google Drive mới.
-- `GET /connected-accounts/google/callback` — Callback khi liên kết tài khoản Drive thành công.
-- `POST /connected-accounts/s3` — Kết nối một bucket S3 mới.
-- `POST /connected-accounts/:id/sync-quota` — Yêu cầu đồng bộ lại dung lượng của tài khoản.
-- `DELETE /connected-accounts/:id` — Ngắt kết nối một tài khoản lưu trữ.
-- `GET /storage/summary` — Tổng hợp dung lượng toàn hệ thống (đã dùng, tổng cộng, phần trăm).
-- `GET /storage/breakdown` — Thống kê dung lượng phân bổ trên từng tài khoản.
-- `GET /storage/routing-policy` — Lấy chính sách định tuyến tải lên hiện tại.
-- `PATCH /storage/routing-policy` — Cập nhật chính sách định tuyến (`most_available`, `round_robin`, `priority`).
+```bash
+curl -X POST https://drive.example.com/api/v1/uploads \
+  -H "Authorization: Bearer 9d_live_xxxxxxxx" \
+  -F 'filesMeta=[{"fieldName":"file-0","fileName":"report.pdf","mimeType":"application/pdf","sizeBytes":"20480"}]' \
+  -F "file-0=@./report.pdf;type=application/pdf"
+```
 
-### Quản lý Thư mục (Folders)
-- `GET /folders?parentId=<id>` — Lấy danh sách thư mục con (hoặc thư mục gốc nếu để trống). Tự động gộp các thư mục cùng tên từ nhiều tài khoản.
-- `GET /folders?all=1` — Lấy toàn bộ cây thư mục ảo (dùng cho breadcrumb và hộp thoại di chuyển).
-- `POST /folders` — Tạo một thư mục ảo mới.
-- `POST /folders/refresh` — Đọc trực tiếp Google Drive API để cập nhật tức thì các thay đổi mới nhất.
-- `GET /folders/:id/download` — Tải xuống toàn bộ thư mục và các nhánh con dưới dạng file ZIP (stream trực tiếp bằng `archiver`).
-- `PATCH /folders/:id` — Đổi tên hoặc di chuyển thư mục sang thư mục cha khác.
-- `DELETE /folders/:id` — Xóa thư mục vào thùng rác.
+## Bảo mật
 
-### Quản lý Tệp (Files)
-- `GET /files` — Danh sách tệp kèm bộ lọc (`folderId`, `q`, `kind`, `accountId`, `minSize`, `maxSize`, `startDate`, `endDate`).
-- `GET /files/:id` — Chi tiết metadata của một tệp.
-- `PATCH /files/:id` — Cập nhật thông tin tệp (đổi tên, chuyển thư mục).
-- `PATCH /files/batch` — Cập nhật hàng loạt tệp (di chuyển nhiều tệp cùng lúc).
-- `DELETE /files/:id` — Đưa tệp vào thùng rác.
-- `DELETE /files/batch` — Đưa hàng loạt tệp vào thùng rác.
-- `POST /files/batch/restore` — Khôi phục hàng loạt tệp từ thùng rác.
-- `DELETE /files/batch/permanent` — Xóa vĩnh viễn hàng loạt tệp khỏi dịch vụ lưu trữ.
-- `POST /files/batch-download` — Tải xuống danh sách nhiều tệp đã chọn gộp chung thành một file ZIP.
-- `GET /files/:id/download` — Tải tệp xuống trực tiếp từ dịch vụ lưu trữ qua backend stream.
-- `GET /files/:id/view-url` — Lấy đường dẫn xem trước an toàn.
-- `POST /files/:id/preview-token` — Tạo mã token xem trước ngắn hạn (phục vụ video Plyr, ảnh, iframe).
-- `GET /files/preview/:token` — Truyền phát dữ liệu tệp dựa theo mã preview token.
+- Token Google và khoá S3 được mã hoá AES trước khi lưu; mật khẩu băm bằng Argon2; refresh token, token chia sẻ và khoá API chỉ lưu bản băm.
+- Mọi truy vấn dữ liệu người dùng lọc theo chủ sở hữu ngay trong câu truy vấn; id là UUID và trả về 404 cho bản ghi của người khác.
+- Giới hạn tần suất cho đăng nhập, đăng ký và toàn bộ API, trả `429` kèm `Retry-After`.
+- CORS chỉ cho phép `FRONTEND_URL`.
+- Tệp không bao giờ được ghi xuống ổ cứng máy chủ.
 
-### Tải lên (Uploads)
-- `POST /uploads` — Tải tệp lên hệ thống (Multipart form với `filesMeta` đi trước các phần tệp).
-- `POST /api/v1/uploads` — API tải lên dành riêng cho lập trình viên (xác thực bằng API Key mang quyền `files:upload`).
+Phát hiện lỗ hổng bảo mật? Vui lòng báo riêng qua [GitHub Security Advisories](https://github.com/nhmt-hetcuu/HCDrive/security/advisories/new) thay vì mở issue công khai.
 
----
-
-## 11. Bảo mật & An toàn dữ liệu
-
-1. **Mã hóa khóa lưu trữ**: Refresh token Google OAuth và khóa bí mật S3 được mã hóa an toàn trong CSDL bằng thuật toán AES-256 thông qua khóa `TOKEN_ENCRYPTION_KEY`.
-2. **Băm một chiều mật khẩu & token**: Mật khẩu người dùng được băm bằng thuật toán Argon2 hiện đại. Refresh token của ứng dụng, API Key lập trình viên và mã token xem trước chỉ lưu bản băm (hash).
-3. **Không lưu trữ đĩa**: Dữ liệu tệp không bao giờ nằm trên ổ cứng máy chủ, triệt tiêu nguy cơ lộ dữ liệu từ ổ cứng tạm.
-4. **Cơ chế CORS nghiêm ngặt**: Chỉ cho phép các yêu cầu có nguồn gốc hợp lệ từ `FRONTEND_URL`.
-5. **Phân quyền API Key chi tiết**: API Key được phân quyền theo scope cụ thể và có thể thu hồi bất kỳ lúc nào từ giao diện quản trị.
-
----
-
-## 12. Xử lý sự cố thường gặp (Troubleshooting)
+## Xử lý sự cố
 
 <details>
-<summary><b>Lỗi: "Google Drive API has not been used in project … or it is disabled"</b></summary>
+<summary><b>"Quota exceeded for quota metric 'Queries' … Requests per minute"</b></summary>
 
-Hãy chắc chắn bạn đã kích hoạt **Google Drive API** trong **chính dự án Google Cloud** chứa OAuth Client ID (truy cập *APIs & Services → Library → Google Drive API → Enable*) và chờ khoảng 3–5 phút để Google áp dụng.
+OAuth client đang dùng hết lượt request trong phút đó, thường gặp với client mặc định. HCDrive tự tạm dừng đồng bộ tài khoản đó một phút và chuyển tải lên sang tài khoản khác. Cách khắc phục lâu dài: tạo OAuth client riêng (xem [Kết nối Google Drive](#kết-nối-google-drive)), rồi mở **ⓘ Xem thông tin** của tài khoản và chọn **Kết nối lại bằng OAuth riêng**.
 </details>
 
 <details>
-<summary><b>Lỗi: "Access blocked … Error 403: access_denied"</b></summary>
+<summary><b>"Google Drive API has not been used in project … or it is disabled"</b></summary>
 
-Màn hình OAuth của bạn đang ở trạng thái **Testing**. Bạn cần vào *OAuth consent screen → Test users* và thêm email Google mà bạn muốn đăng nhập vào danh sách này.
+Bật **Google Drive API** trong đúng project chứa OAuth client (*APIs & Services → Library*), đợi vài phút rồi thử lại.
 </details>
 
 <details>
-<summary><b>Lỗi: Lệnh Prisma client generate bị khóa file trên Windows</b></summary>
+<summary><b>"Access blocked … Error 403: access_denied"</b></summary>
 
-Do tiến trình Node.js đang chạy và khóa tệp mã nguồn Prisma. Hãy tạm dừng dev server, sau đó chạy lại lệnh `npx prisma generate` trong thư mục `backend/`.
+Ứng dụng OAuth đang ở chế độ *Testing*. Thêm email cần đăng nhập vào *OAuth consent screen → Test users*.
 </details>
 
 <details>
-<summary><b>Frontend vẫn gọi đến địa chỉ API cũ sau khi sửa biến môi trường</b></summary>
+<summary><b>"redirect_uri_mismatch"</b></summary>
 
-Vite nhúng biến `VITE_API_URL` vào mã nguồn tĩnh tại thời điểm build. Sau khi đổi biến này, bạn cần build lại frontend bằng lệnh `npm run build` hoặc `docker compose up -d --build`.
+Redirect URI trong Google Cloud phải trùng chính xác `FRONTEND_URL` + `/connected-accounts/google/callback` (cả `http`/`https` và cổng). Với địa chỉ IP nội bộ, dùng cách dán mã.
 </details>
 
----
+<details>
+<summary><b>Tải lên tệp lớn bị ngắt khi chạy sau nginx</b></summary>
 
-## 13. 💖 Ủng hộ dự án (Donate)
+Thêm `client_max_body_size 0;`, `proxy_request_buffering off;` và tăng `proxy_read_timeout` / `proxy_send_timeout` như cấu hình mẫu ở trên. Với Cloudflare gói miễn phí, mỗi request tải lên bị giới hạn 100 MB; HCDrive tải tệp lớn theo từng phần nên vẫn hoạt động.
+</details>
 
-Nếu bạn thấy **HCDrive** hữu ích và giúp bạn quản lý lưu trữ đám mây hiệu quả hơn, bạn có thể ủng hộ tác giả để duy trì và phát triển thêm các tính năng mới:
+<details>
+<summary><b>Bị khoá ngoài vì captcha</b></summary>
+
+Đặt `DISABLE_CAPTCHA=true` trong `.env`, chạy `docker compose up -d`, đăng nhập và sửa khoá trong **Cài đặt → Bảo mật**, rồi xoá biến đó.
+</details>
+
+<details>
+<summary><b><code>prisma generate</code> báo khoá tệp trên Windows</b></summary>
+
+Một tiến trình Node đang giữ tệp của Prisma. Dừng các dev server rồi chạy lại lệnh trong thư mục `backend/`.
+</details>
+
+## Đóng góp
+
+Mọi đóng góp đều được hoan nghênh. Với thay đổi lớn, hãy mở issue để trao đổi trước. Pull request nên:
+
+- giữ nguyên kiến trúc truyền thẳng (không ghi tệp xuống đĩa);
+- build sạch cả `backend` và `frontend`;
+- không chứa tệp `.env` hay bất kỳ khoá bí mật nào.
+
+## Ủng hộ dự án
+
+Nếu HCDrive hữu ích với bạn, bạn có thể ủng hộ tác giả để duy trì và phát triển dự án.
 
 <p align="center">
-  <img src="https://img.vietqr.io/image/MB-01001200910010-compact2.png?amount=&addInfo=Donate%20HCDrive&accountName=NGUYEN%20HOANG%20MINH%20TRI" alt="VietQR MB Bank - NGUYEN HOANG MINH TRI" width="320" style="border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);" />
+  <img src="https://img.vietqr.io/image/MB-01001200910010-compact2.png?amount=&addInfo=Donate%20HCDrive&accountName=NGUYEN%20HOANG%20MINH%20TRI" alt="Mã VietQR MB Bank - NGUYEN HOANG MINH TRI" width="280" />
 </p>
 
-| Thông tin chuyển khoản | Chi tiết |
+| | |
 |---|---|
-| 🏦 **Ngân hàng** | **MB Bank** (Ngân hàng TMCP Quân Đội) |
-| 💳 **Số tài khoản** | `01001200910010` |
-| 👤 **Chủ tài khoản** | **NGUYEN HOANG MINH TRI** |
-| 💬 **Nội dung** | `Donate HCDrive` (hoặc tin nhắn của bạn) |
+| Ngân hàng | MB Bank (Ngân hàng TMCP Quân Đội) |
+| Số tài khoản | `01001200910010` |
+| Chủ tài khoản | NGUYEN HOANG MINH TRI |
+| Nội dung | `Donate HCDrive` |
 
-*Chân thành cảm ơn mọi sự đóng góp và ủng hộ của bạn!* 🙏
+Cảm ơn bạn đã ủng hộ.
 
----
+## Giấy phép
 
-## 📄 Giấy phép (License)
-
-Dự án được phân phối dưới giấy phép **Apache-2.0 License**. Xem tệp [LICENSE](LICENSE) để biết thêm chi tiết.
+Phát hành theo giấy phép [Apache License 2.0](LICENSE).

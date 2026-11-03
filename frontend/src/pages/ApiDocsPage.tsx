@@ -1,35 +1,34 @@
-import { useState, useMemo, useEffect, useRef } from "react"
+import { useState, useMemo, useEffect, useRef, type ReactNode } from "react"
 import { useNavigate } from "react-router-dom"
 import { API_URL } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { BrandLogo } from "@/components/drive/BrandLogo"
+import { apiCategories, buildEndpoints, type ApiCategory, type Endpoint } from "@/data/api-reference"
 
-type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE"
+const svg = (children: ReactNode) => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{children}</svg>
+)
 
-type Endpoint = {
-  id: string
-  method: HttpMethod
-  path: string
-  titleVi: string
-  titleEn: string
-  descVi: string
-  descEn: string
-  category: "uploads" | "folders" | "files" | "storage" | "auth" | "shares" | "keys"
-  authRequired: boolean
-  authType?: "bearer" | "apiKey" | "public"
-  params?: { name: string; type: string; required: boolean; descVi: string; descEn: string }[]
-  bodyExample?: string
-  responseExample?: string
-  errorExample?: string
-  curlSnippet?: string
-  jsSnippet?: string
-  pySnippet?: string
+const categoryIcons: Record<ApiCategory, ReactNode> = {
+  auth: svg(<><rect width="18" height="11" x="3" y="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></>),
+  uploads: svg(<path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242M12 12v9m-4-4 4-4 4 4" />),
+  files: svg(<><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" /><path d="M14 2v4a2 2 0 0 0 2 2h4" /></>),
+  folders: svg(<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />),
+  drive: svg(<><path d="M12 2 2 19h20Z" /><path d="M7.5 10.5h9" /></>),
+  sharing: svg(<><circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" /><line x1="8.59" x2="15.42" y1="13.51" y2="17.49" /><line x1="15.41" x2="8.59" y1="6.51" y2="10.49" /></>),
+  storage: svg(<><ellipse cx="12" cy="5" rx="9" ry="3" /><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" /><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3" /></>),
+  library: svg(<><path d="M22 10 12 5 2 10l10 5 10-5Z" /><path d="M6 12v5c3 3 9 3 12 0v-5" /></>),
+  keys: svg(<><path d="m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4" /><path d="m21 2-9.6 9.6" /><circle cx="7.5" cy="15.5" r="5.5" /></>),
+  admin: svg(<><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z" /></>),
 }
+
+const STATUS_TEXT: Record<number, string> = { 200: 'OK', 201: 'Created', 202: 'Accepted', 206: 'Partial Content', 400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden', 404: 'Not Found', 409: 'Conflict', 429: 'Too Many Requests' }
+const statusLabel = (code: number) => `${code} ${STATUS_TEXT[code] ?? ''}`.trim()
 
 export function ApiDocsPage() {
   const navigate = useNavigate()
   const [searchQuery, setSearchQuery] = useState("")
-  const [activeSection, setActiveSection] = useState<string>("upload-api")
+  const [activeSection, setActiveSection] = useState<string>("overview")
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [activeSnippetTab, setActiveSnippetTab] = useState<Record<string, "curl" | "js" | "python">>({})
   const [activeResponseTab, setActiveResponseTab] = useState<Record<string, "200" | "400">>({})
@@ -61,609 +60,9 @@ export function ApiDocsPage() {
     })
   }
 
-  const categories = [
-    {
-      id: "uploads",
-      labelVi: "Tải lên & API Key",
-      icon: (
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242M12 12v9m-4-4 4-4 4 4" />
-        </svg>
-      ),
-    },
-    {
-      id: "folders",
-      labelVi: "Thư mục & Tải ZIP",
-      icon: (
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
-        </svg>
-      ),
-    },
-    {
-      id: "files",
-      labelVi: "Tệp tin & Tải gộp",
-      icon: (
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
-          <path d="M14 2v4a2 2 0 0 0 2 2h4" />
-          <path d="M10 9H8m8 4H8m8 4H8" />
-        </svg>
-      ),
-    },
-    {
-      id: "storage",
-      labelVi: "Lưu trữ & Dung lượng",
-      icon: (
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <ellipse cx="12" cy="5" rx="9" ry="3" />
-          <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
-          <path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3" />
-        </svg>
-      ),
-    },
-    {
-      id: "auth",
-      labelVi: "Xác thực tài khoản",
-      icon: (
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
-          <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-        </svg>
-      ),
-    },
-    {
-      id: "shares",
-      labelVi: "Chia sẻ công khai",
-      icon: (
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <circle cx="18" cy="5" r="3" />
-          <circle cx="6" cy="12" r="3" />
-          <circle cx="18" cy="19" r="3" />
-          <line x1="8.59" x2="15.42" y1="13.51" y2="17.49" />
-          <line x1="15.41" x2="8.59" y1="6.51" y2="10.49" />
-        </svg>
-      ),
-    },
-    {
-      id: "keys",
-      labelVi: "Quản lý API Key",
-      icon: (
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <path d="m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4" />
-          <path d="m21 2-9.6 9.6" />
-          <circle cx="7.5" cy="15.5" r="5.5" />
-        </svg>
-      ),
-    },
-  ]
+  const categories = apiCategories.map((category) => ({ ...category, icon: categoryIcons[category.id] }))
 
-  const endpoints: Endpoint[] = useMemo(() => [
-    // 1. UPLOADS & EXTERNAL API
-    {
-      id: 'upload-api',
-      method: 'POST',
-      path: '/api/v1/uploads',
-      titleVi: 'API tải lên bằng API Key (Developer)',
-      titleEn: 'Upload files via API Key (Developer)',
-      descVi: 'Tải tệp trực tiếp lên hệ thống bằng API Key. Hỗ trợ gửi tệp qua multipart/form-data kèm filesMeta mô tả từng tệp. Tự động định tuyến đến tài khoản lưu trữ phù hợp mà không lưu đĩa máy chủ (zero-disk streaming).',
-      descEn: 'Upload files directly using an API key with files:upload scope. Streams files through the backend directly to storage accounts without local disk buffering.',
-      category: 'uploads',
-      authRequired: true,
-      authType: 'apiKey',
-      params: [
-        { name: 'Authorization', type: 'Header', required: true, descVi: 'Mã API Key dạng: Bearer 9d_live_...', descEn: 'Bearer API Key format: Bearer 9d_live_...' },
-        { name: 'filesMeta', type: 'JSON Array', required: true, descVi: 'Chuỗi JSON mô tả mảng các tệp: [{ fieldName, fileName, mimeType, sizeBytes, folderId? }]', descEn: 'JSON array of file metadata matching multipart field names' },
-        { name: '[fieldName]', type: 'Binary File', required: true, descVi: 'Dữ liệu nhị phân của tệp có tên trường khớp với fieldName trong filesMeta', descEn: 'Binary file payload corresponding to fieldName in filesMeta' },
-      ],
-      bodyExample: `// multipart/form-data
-filesMeta: '[{"fieldName":"file-0","fileName":"report.pdf","mimeType":"application/pdf","sizeBytes":"1048576"}]'
-file-0: (binary payload)`,
-      responseExample: `{
-  "success": true,
-  "uploaded": [
-    {
-      "id": "fil_98a7bcd",
-      "name": "report.pdf",
-      "sizeBytes": "1048576",
-      "mimeType": "application/pdf",
-      "folderId": null,
-      "createdAt": "2026-11-01T12:00:00.000Z"
-    }
-  ]
-}`,
-      errorExample: `{
-  "code": "STORAGE_QUOTA_EXCEEDED",
-  "message": "No connected storage accounts have sufficient free space."
-}`,
-      curlSnippet: `curl -X POST "${baseUrl}/api/v1/uploads" \\
-  -H "Authorization: Bearer 9d_live_your_api_key_here" \\
-  -F 'filesMeta=[{"fieldName":"file-0","fileName":"document.pdf","mimeType":"application/pdf","sizeBytes":"1024"}]' \\
-  -F "file-0=@document.pdf;type=application/pdf"`,
-      jsSnippet: `const form = new FormData();
-form.append('filesMeta', JSON.stringify([{
-  fieldName: 'file-0',
-  fileName: file.name,
-  mimeType: file.type || 'application/octet-stream',
-  sizeBytes: String(file.size)
-}]));
-form.append('file-0', file);
-
-const response = await fetch('${baseUrl}/api/v1/uploads', {
-  method: 'POST',
-  headers: {
-    'Authorization': 'Bearer 9d_live_your_api_key_here'
-  },
-  body: form
-});
-const data = await response.json();`,
-      pySnippet: `import requests
-import json
-
-url = "${baseUrl}/api/v1/uploads"
-headers = {"Authorization": "Bearer 9d_live_your_api_key_here"}
-
-files_meta = [{
-    "fieldName": "file-0",
-    "fileName": "document.pdf",
-    "mimeType": "application/pdf",
-    "sizeBytes": "1024"
-}]
-
-files = {
-    "filesMeta": (None, json.dumps(files_meta), "application/json"),
-    "file-0": ("document.pdf", open("document.pdf", "rb"), "application/pdf")
-}
-
-r = requests.post(url, headers=headers, files=files)
-print(r.json())`,
-    },
-
-    // 2. FOLDERS & STREAMING ZIP
-    {
-      id: 'folders-download',
-      method: 'GET',
-      path: '/folders/:id/download',
-      titleVi: 'Nén và tải thư mục thành ZIP (Streaming)',
-      titleEn: 'Download folder as ZIP (Streaming)',
-      descVi: 'Quét toàn bộ cấu trúc thư mục con và tệp tin bên trong virtual folder trên cơ sở dữ liệu và nén thành tệp ZIP truyền phát trực tiếp đến trình duyệt.',
-      descEn: 'Recursively packages folder contents into a streaming ZIP archive using archiver with zero local disk buffering.',
-      category: 'folders',
-      authRequired: true,
-      authType: 'bearer',
-      params: [
-        { name: 'id', type: 'Path (String)', required: true, descVi: 'ID của thư mục cần tải xuống', descEn: 'Target folder ID' }
-      ],
-      responseExample: `Content-Type: application/zip
-Content-Disposition: attachment; filename="Folder.zip"
-Transfer-Encoding: chunked
-
-[Binary ZIP Stream containing folder hierarchy]`,
-      errorExample: `{
-  "code": "FOLDER_NOT_FOUND",
-  "message": "Virtual folder does not exist or has been deleted."
-}`,
-      curlSnippet: `curl -X GET "${baseUrl}/folders/fld_123/download" \\
-  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \\
-  --output "my_folder.zip"`,
-      jsSnippet: `const res = await fetch('${baseUrl}/folders/fld_123/download', {
-  headers: { 'Authorization': 'Bearer ' + accessToken }
-});
-const blob = await res.blob();
-const a = document.createElement('a');
-a.href = URL.createObjectURL(blob);
-a.download = 'My_Folder.zip';
-a.click();`,
-    },
-    {
-      id: 'folders-list',
-      method: 'GET',
-      path: '/folders',
-      titleVi: 'Lấy danh sách thư mục (Gộp nhiều tài khoản)',
-      titleEn: 'List folders (Merged across accounts)',
-      descVi: 'Lấy các thư mục con trong thư mục cha (hoặc thư mục gốc nếu parentId rỗng). Tự động gộp các thư mục cùng tên từ nhiều tài khoản Google Drive.',
-      descEn: 'Get subfolders under parentId or root. Merges folders with identical names across connected accounts.',
-      category: 'folders',
-      authRequired: true,
-      authType: 'bearer',
-      params: [
-        { name: 'parentId', type: 'Query (String)', required: false, descVi: 'ID thư mục cha (để trống = thư mục gốc)', descEn: 'Parent folder ID (empty = root)' },
-        { name: 'all', type: 'Query (Number)', required: false, descVi: 'Truyền all=1 để lấy toàn bộ cây thư mục', descEn: 'Pass all=1 to fetch entire tree' }
-      ],
-      responseExample: `[
-  {
-    "id": "fld_01",
-    "name": "Tài liệu 2026",
-    "parentId": null,
-    "hasChildren": true
-  }
-]`,
-      errorExample: `{
-  "code": "AUTH_REQUIRED",
-  "message": "Bearer token required."
-}`,
-      curlSnippet: `curl -X GET "${baseUrl}/folders?parentId=root" \\
-  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"`,
-      jsSnippet: `const res = await fetch('${baseUrl}/folders?parentId=root', {
-  headers: { 'Authorization': 'Bearer ' + accessToken }
-});
-const folders = await res.json();`,
-    },
-    {
-      id: 'folders-refresh',
-      method: 'POST',
-      path: '/folders/refresh',
-      titleVi: 'Làm mới trực tiếp từ Google Drive (Live Refresh)',
-      titleEn: 'Live refresh from Google Drive',
-      descVi: 'Gọi trực tiếp Google Drive v3 API để đồng bộ các thay đổi mới nhất (thêm, sửa, xoá file trên Drive) vào cơ sở dữ liệu HCDrive tức thì.',
-      descEn: 'Directly polls Google Drive v3 API to synchronize remote changes into HCDrive database.',
-      category: 'folders',
-      authRequired: true,
-      authType: 'bearer',
-      responseExample: `{
-  "success": true,
-  "syncedFiles": 14,
-  "syncedFolders": 3
-}`,
-      errorExample: `{
-  "code": "SYNC_FAILED",
-  "message": "Failed to communicate with Google Drive API."
-}`,
-      curlSnippet: `curl -X POST "${baseUrl}/folders/refresh" \\
-  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"`,
-      jsSnippet: `const res = await fetch('${baseUrl}/folders/refresh', {
-  method: 'POST',
-  headers: { 'Authorization': 'Bearer ' + accessToken }
-});
-const result = await res.json();`,
-    },
-
-    // 3. FILES & BATCH ACTIONS
-    {
-      id: 'files-batch-download',
-      method: 'POST',
-      path: '/files/batch-download',
-      titleVi: 'Tải gộp nhiều tệp thành ZIP (Multi-Selection)',
-      titleEn: 'Batch download selected files as ZIP',
-      descVi: 'Truyền mảng fileIds đã tick chọn trên giao diện HCDrive để đóng gói trực tiếp thành một file ZIP duy nhất.',
-      descEn: 'Takes array of file IDs selected in multi-file view and streams a single packaged ZIP archive.',
-      category: 'files',
-      authRequired: true,
-      authType: 'bearer',
-      params: [
-        { name: 'fileIds', type: 'JSON Array', required: true, descVi: 'Mảng chuỗi ID các file cần tải gộp', descEn: 'Array of file IDs to package' }
-      ],
-      bodyExample: `{
-  "fileIds": [
-    "fil_abc123",
-    "fil_xyz789"
-  ]
-}`,
-      responseExample: `Content-Type: application/zip
-Content-Disposition: attachment; filename="HCDrive_Selected.zip"
-Transfer-Encoding: chunked
-
-[Binary ZIP Stream]`,
-      errorExample: `{
-  "code": "FILES_NOT_FOUND",
-  "message": "No valid files found for the given IDs."
-}`,
-      curlSnippet: `curl -X POST "${baseUrl}/files/batch-download" \\
-  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \\
-  -H "Content-Type: application/json" \\
-  -d '{"fileIds": ["fil_abc123", "fil_xyz789"]}' \\
-  --output "HCDrive_Selected.zip"`,
-      jsSnippet: `const res = await fetch('${baseUrl}/files/batch-download', {
-  method: 'POST',
-  headers: {
-    'Authorization': 'Bearer ' + accessToken,
-    'Content-Type': 'application/json'
-  },
-  body: JSON.stringify({ fileIds: selectedFileIds })
-});
-const blob = await res.blob();
-const a = document.createElement('a');
-a.href = URL.createObjectURL(blob);
-a.download = 'HCDrive_Selected.zip';
-a.click();`,
-    },
-    {
-      id: 'files-download',
-      method: 'GET',
-      path: '/files/:id/download',
-      titleVi: 'Tải tệp tin đơn lẻ (Direct Stream)',
-      titleEn: 'Stream or download single file',
-      descVi: 'Truyền phát trực tiếp tệp tin từ tài khoản lưu trữ Google Drive hoặc S3 tới người dùng mà không lưu cache trên đĩa cứng máy chủ.',
-      descEn: 'Directly streams the file from Google Drive or S3 to client with proper Content-Type and Range support.',
-      category: 'files',
-      authRequired: true,
-      authType: 'bearer',
-      params: [
-        { name: 'id', type: 'Path (String)', required: true, descVi: 'ID của tệp tin cần tải', descEn: 'Target file ID' }
-      ],
-      responseExample: `Content-Type: application/octet-stream
-Content-Disposition: attachment; filename="document.pdf"
-
-[Binary File Payload]`,
-      errorExample: `{
-  "code": "FILE_NOT_FOUND",
-  "message": "File does not exist or has been moved to trash."
-}`,
-      curlSnippet: `curl -X GET "${baseUrl}/files/fil_123/download" \\
-  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \\
-  --output "downloaded_file.pdf"`,
-      jsSnippet: `window.open('${baseUrl}/files/fil_123/download?token=' + accessToken);`,
-    },
-
-    // 4. STORAGE & QUOTAS
-    {
-      id: 'storage-summary',
-      method: 'GET',
-      path: '/storage/summary',
-      titleVi: 'Tổng hợp dung lượng lưu trữ (Quota Tracker)',
-      titleEn: 'Combined storage quota summary',
-      descVi: 'Lấy tổng dung lượng đã dùng, tổng dung lượng khả dụng và danh sách các tài khoản Google Drive & S3 đang kết nối.',
-      descEn: 'Returns real-time aggregated quota stats across all connected accounts.',
-      category: 'storage',
-      authRequired: true,
-      authType: 'bearer',
-      responseExample: `{
-  "totalCapacityBytes": 107374182400,
-  "totalUsedBytes": 34892182000,
-  "totalAvailableBytes": 72482000400,
-  "accountCount": 4,
-  "routingPolicy": "most_available"
-}`,
-      errorExample: `{
-  "code": "UNAUTHORIZED",
-  "message": "Invalid or expired session token."
-}`,
-      curlSnippet: `curl -X GET "${baseUrl}/storage/summary" \\
-  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"`,
-      jsSnippet: `const res = await fetch('${baseUrl}/storage/summary', {
-  headers: { 'Authorization': 'Bearer ' + accessToken }
-});
-const summary = await res.json();`,
-    },
-    {
-      id: 'storage-policy',
-      method: 'PATCH',
-      path: '/storage/routing-policy',
-      titleVi: 'Cập nhật chính sách định tuyến tải lên',
-      titleEn: 'Update upload routing policy',
-      descVi: 'Chọn phương thức chọn tài khoản khi tải tệp: most_available (nhiều dung lượng trống nhất), round_robin (xoay vòng đều) hoặc priority (theo thứ tự ưu tiên).',
-      descEn: 'Updates account selection policy: most_available, round_robin, or priority.',
-      category: 'storage',
-      authRequired: true,
-      authType: 'bearer',
-      params: [
-        { name: 'mode', type: 'String', required: true, descVi: '"most_available" | "round_robin" | "priority"', descEn: 'Routing strategy' },
-        { name: 'priorityAccountIds', type: 'String[]', required: false, descVi: 'Mảng ID tài khoản ưu tiên khi dùng chế độ priority', descEn: 'Priority account IDs array' }
-      ],
-      bodyExample: `{
-  "mode": "most_available",
-  "priorityAccountIds": []
-}`,
-      responseExample: `{
-  "success": true,
-  "policy": {
-    "mode": "most_available",
-    "updatedAt": "2026-11-01T12:00:00.000Z"
-  }
-}`,
-      errorExample: `{
-  "code": "INVALID_POLICY_MODE",
-  "message": "Allowed modes: most_available, round_robin, priority"
-}`,
-      curlSnippet: `curl -X PATCH "${baseUrl}/storage/routing-policy" \\
-  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \\
-  -H "Content-Type: application/json" \\
-  -d '{"mode": "most_available"}'`,
-      jsSnippet: `const res = await fetch('${baseUrl}/storage/routing-policy', {
-  method: 'PATCH',
-  headers: {
-    'Authorization': 'Bearer ' + accessToken,
-    'Content-Type': 'application/json'
-  },
-  body: JSON.stringify({ mode: 'most_available' })
-});`,
-    },
-
-    // 5. AUTHENTICATION
-    {
-      id: 'auth-login',
-      method: 'POST',
-      path: '/auth/login',
-      titleVi: 'Đăng nhập hệ thống',
-      titleEn: 'User login',
-      descVi: 'Đăng nhập bằng email và mật khẩu, trả về Access Token và thông tin tài khoản.',
-      descEn: 'Authenticates with email and password, returning JWT Access Token.',
-      category: 'auth',
-      authRequired: false,
-      authType: 'public',
-      params: [
-        { name: 'email', type: 'String', required: true, descVi: 'Email tài khoản', descEn: 'Account email' },
-        { name: 'password', type: 'String', required: true, descVi: 'Mật khẩu bảo mật', descEn: 'Secure password' }
-      ],
-      bodyExample: `{
-  "email": "user@example.com",
-  "password": "your_secure_password"
-}`,
-      responseExample: `{
-  "accessToken": "eyJhbGciOiJIUzI1NiIs...",
-  "user": {
-    "id": "usr_123",
-    "email": "user@example.com",
-    "name": "Nguyen Hoang",
-    "isAdmin": true
-  }
-}`,
-      errorExample: `{
-  "code": "INVALID_CREDENTIALS",
-  "message": "Incorrect email or password."
-}`,
-      curlSnippet: `curl -X POST "${baseUrl}/auth/login" \\
-  -H "Content-Type: application/json" \\
-  -d '{"email": "user@example.com", "password": "password123"}'`,
-      jsSnippet: `const res = await fetch('${baseUrl}/auth/login', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ email: 'user@example.com', password: 'password123' })
-});
-const { accessToken, user } = await res.json();`,
-    },
-    {
-      id: 'auth-me',
-      method: 'GET',
-      path: '/auth/me',
-      titleVi: 'Lấy thông tin người dùng hiện tại',
-      titleEn: 'Get current user profile',
-      descVi: 'Trả về thông tin hồ sơ của tài khoản đang đăng nhập từ access token.',
-      descEn: 'Returns current authenticated user details from access token.',
-      category: 'auth',
-      authRequired: true,
-      authType: 'bearer',
-      responseExample: `{
-  "id": "usr_123",
-  "email": "user@example.com",
-  "name": "Nguyen Hoang",
-  "isAdmin": true,
-  "createdAt": "2026-01-15T08:30:00Z"
-}`,
-      errorExample: `{
-  "code": "AUTH_REQUIRED",
-  "message": "Valid Bearer access token must be provided."
-}`,
-      curlSnippet: `curl -X GET "${baseUrl}/auth/me" \\
-  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"`,
-      jsSnippet: `const res = await fetch('${baseUrl}/auth/me', {
-  headers: { 'Authorization': 'Bearer ' + accessToken }
-});
-const profile = await res.json();`,
-    },
-
-    // 6. SHARES
-    {
-      id: 'files-share',
-      method: 'POST',
-      path: '/files/:id/share',
-      titleVi: 'Tạo liên kết chia sẻ công khai',
-      titleEn: 'Create public share link',
-      descVi: 'Tạo mã chia sẻ tệp công khai. Có thể đặt mật khẩu hoặc ngày hết hạn.',
-      descEn: 'Generates public share link with optional password and expiry date.',
-      category: 'shares',
-      authRequired: true,
-      authType: 'bearer',
-      params: [
-        { name: 'id', type: 'Path (String)', required: true, descVi: 'ID file cần chia sẻ', descEn: 'File ID' },
-        { name: 'isPublic', type: 'Boolean', required: true, descVi: 'Bật liên kết công khai', descEn: 'Enable public link' },
-        { name: 'password', type: 'String', required: false, descVi: 'Mật khẩu bảo vệ (tuỳ chọn)', descEn: 'Optional password' }
-      ],
-      bodyExample: `{
-  "isPublic": true,
-  "password": "optional_password"
-}`,
-      responseExample: `{
-  "shareToken": "shr_87a9b0c1",
-  "shareUrl": "${baseUrl}/public/files/shr_87a9b0c1",
-  "hasPassword": true
-}`,
-      errorExample: `{
-  "code": "FILE_NOT_FOUND",
-  "message": "File does not exist."
-}`,
-      curlSnippet: `curl -X POST "${baseUrl}/files/file_123/share" \\
-  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \\
-  -H "Content-Type: application/json" \\
-  -d '{"isPublic": true}'`,
-      jsSnippet: `const res = await fetch('${baseUrl}/files/file_123/share', {
-  method: 'POST',
-  headers: {
-    'Authorization': 'Bearer ' + accessToken,
-    'Content-Type': 'application/json'
-  },
-  body: JSON.stringify({ isPublic: true })
-});`,
-    },
-
-    // 7. API KEYS
-    {
-      id: 'api-keys-list',
-      method: 'GET',
-      path: '/api-keys',
-      titleVi: 'Lấy danh sách API Keys',
-      titleEn: 'List user API keys',
-      descVi: 'Xem danh sách các khóa API do người dùng đã tạo.',
-      descEn: 'Retrieves all API keys created by user.',
-      category: 'keys',
-      authRequired: true,
-      authType: 'bearer',
-      responseExample: `[
-  {
-    "id": "key_123",
-    "name": "CI Server Deploy",
-    "keyPrefix": "9d_live_abc",
-    "scopes": ["files:upload"],
-    "createdAt": "2026-11-01T12:00:00.000Z"
-  }
-]`,
-      errorExample: `{
-  "code": "AUTH_REQUIRED",
-  "message": "Bearer token required."
-}`,
-      curlSnippet: `curl -X GET "${baseUrl}/api-keys" \\
-  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"`,
-      jsSnippet: `const res = await fetch('${baseUrl}/api-keys', {
-  headers: { 'Authorization': 'Bearer ' + accessToken }
-});
-const keys = await res.json();`,
-    },
-    {
-      id: 'api-keys-create',
-      method: 'POST',
-      path: '/api-keys',
-      titleVi: 'Tạo API Key mới',
-      titleEn: 'Create new API key',
-      descVi: 'Tạo một khóa API mới mang quyền files:upload. Khóa bí mật chỉ hiển thị 1 lần duy nhất.',
-      descEn: 'Generates a new API key with specified scopes. Secret is returned once.',
-      category: 'keys',
-      authRequired: true,
-      authType: 'bearer',
-      params: [
-        { name: 'name', type: 'String', required: true, descVi: 'Tên định danh khóa', descEn: 'Name of the key' },
-        { name: 'scopes', type: 'String[]', required: true, descVi: 'Mảng quyền hạn (vd: ["files:upload"])', descEn: 'Scopes array' }
-      ],
-      bodyExample: `{
-  "name": "CI Server Deploy",
-  "scopes": ["files:upload"]
-}`,
-      responseExample: `{
-  "apiKey": {
-    "id": "key_123",
-    "name": "CI Server Deploy",
-    "keyPrefix": "9d_live_abc"
-  },
-  "secret": "9d_live_abc1234567890abcdef"
-}`,
-      errorExample: `{
-  "code": "INVALID_SCOPE",
-  "message": "Scope not supported."
-}`,
-      curlSnippet: `curl -X POST "${baseUrl}/api-keys" \\
-  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \\
-  -H "Content-Type: application/json" \\
-  -d '{"name": "Backup Script", "scopes": ["files:upload"]}'`,
-      jsSnippet: `const res = await fetch('${baseUrl}/api-keys', {
-  method: 'POST',
-  headers: {
-    'Authorization': 'Bearer ' + accessToken,
-    'Content-Type': 'application/json'
-  },
-  body: JSON.stringify({ name: 'Backup Script', scopes: ['files:upload'] })
-});
-const { secret } = await res.json();`,
-    },
-  ], [baseUrl])
+  const endpoints: Endpoint[] = useMemo(() => buildEndpoints(baseUrl), [baseUrl])
 
   // ScrollSpy with IntersectionObserver
   useEffect(() => {
@@ -696,6 +95,7 @@ const { secret } = await res.json();`,
         ep.titleVi.toLowerCase().includes(query) ||
         ep.titleEn.toLowerCase().includes(query) ||
         ep.method.toLowerCase().includes(query) ||
+        ep.descVi.toLowerCase().includes(query) ||
         ep.category.toLowerCase().includes(query)
       )
     })
@@ -1161,6 +561,33 @@ const { secret } = await res.json();`,
       line-height: 1.5;
     }
 
+    .overview-code {
+      background: var(--code-bg);
+      color: #e2e8f0;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.8rem;
+      margin: 0 0 20px;
+      overflow-x: auto;
+    }
+    .overview-list {
+      margin: 0 0 20px;
+      padding-left: 18px;
+      font-size: 0.85rem;
+      line-height: 1.6;
+      color: var(--text-main);
+    }
+    .overview-list li { margin-bottom: 6px; }
+    .overview-section code, .endpoint-desc code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.78rem;
+      background: var(--border-subtle);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      padding: 0 4px;
+    }
+
     .params-section {
       margin-top: 24px;
     }
@@ -1413,7 +840,7 @@ const { secret } = await res.json();`,
           <a href="/" className="brand">
             <BrandLogo className="h-7 w-7" />
             <span className="brand-title">HCDrive Developer Reference</span>
-            <span className="brand-badge">REST v1.0</span>
+            <span className="brand-badge">REST · {endpoints.length} endpoint</span>
           </a>
         </div>
 
@@ -1515,6 +942,13 @@ const { secret } = await res.json();`,
           </div>
 
           <nav className="nav-tree">
+            {!searchQuery.trim() ? (
+              <div className="nav-group">
+                <a href="#overview" onClick={() => { setActiveSection("overview"); if (mobileMenuOpen) setMobileMenuOpen(false) }} className={cn("nav-link", activeSection === "overview" && "active")}>
+                  <span className="nav-link-title">Tổng quan · xác thực · lỗi</span>
+                </a>
+              </div>
+            ) : null}
             {categories.map((cat) => {
               const catEps = filteredEndpoints.filter((ep) => ep.category === cat.id)
               if (catEps.length === 0) return null
@@ -1546,6 +980,7 @@ const { secret } = await res.json();`,
 
         {/* 2 & 3. MAIN CONTENT: CENTER (DOCS) & RIGHT (CODE SANDBOX) */}
         <main className="content-area" ref={mainContentRef}>
+          {!searchQuery.trim() ? <OverviewSection baseUrl={baseUrl} total={endpoints.length} /> : null}
           {filteredEndpoints.length === 0 ? (
             <div style={{ padding: "64px", textAlign: "center", color: "var(--text-muted)", fontSize: "0.85rem" }}>
               Không tìm thấy endpoint nào phù hợp với từ khóa.
@@ -1568,7 +1003,7 @@ const { secret } = await res.json();`,
                             <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
                             <path d="M7 11V7a5 5 0 0 1 10 0v4" />
                           </svg>
-                          {ep.authType === "apiKey" ? "API Key" : "Bearer Auth"}
+                          {ep.authType === "apiKey" ? "API Key" : ep.authType === "admin" ? "Bearer · Admin" : "Bearer Auth"}
                         </span>
                       ) : (
                         <span className="auth-pill auth-public">Public</span>
@@ -1686,7 +1121,7 @@ const { secret } = await res.json();`,
                             onClick={() => setActiveResponseTab((prev) => ({ ...prev, [ep.id]: "200" }))}
                             className={cn("code-tab-btn", responseTab === "200" && "active")}
                           >
-                            <span className="status-badge status-200">200 OK</span>
+                            <span className="status-badge status-200">{statusLabel(ep.successStatus ?? 200)}</span>
                           </button>
                           {ep.errorExample && (
                             <button
@@ -1694,7 +1129,7 @@ const { secret } = await res.json();`,
                               onClick={() => setActiveResponseTab((prev) => ({ ...prev, [ep.id]: "400" }))}
                               className={cn("code-tab-btn", responseTab === "400" && "active")}
                             >
-                              <span className="status-badge status-400">400 Error</span>
+                              <span className="status-badge status-400">{statusLabel(ep.errorStatus ?? 400)}</span>
                             </button>
                           )}
                         </div>
@@ -1736,5 +1171,93 @@ const { secret } = await res.json();`,
         </main>
       </div>
     </div>
+  )
+}
+
+function OverviewSection({ baseUrl, total }: { baseUrl: string; total: number }) {
+  const rows: Array<[string, string, string]> = [
+    ['200 / 201 / 202 / 206', 'Thành công / đã tạo / đã nhận (chạy nền) / một phần (Range)', 'Success / created / accepted (background) / partial (Range)'],
+    ['400', 'Dữ liệu không hợp lệ (VALIDATION_ERROR kèm danh sách lỗi) hoặc sai nghiệp vụ', 'Invalid input (VALIDATION_ERROR with issues) or a rule broken'],
+    ['401', 'Thiếu / hết hạn access token: gọi /auth/refresh rồi thử lại', 'Missing / expired access token: call /auth/refresh and retry'],
+    ['403', 'Không có quyền (ví dụ route quản trị, tài khoản bị khoá)', 'Not allowed (admin route, disabled account)'],
+    ['404', 'Không tồn tại — hoặc thuộc người khác (HCDrive không tiết lộ là có tồn tại)', 'Not found — or someone else\'s (existence is not revealed)'],
+    ['409', 'Trùng lặp (email đã có, liên kết đã dùng…)', 'Conflict (email taken, already linked…)'],
+    ['429', 'Quá nhiều request: chờ số giây trong header Retry-After', 'Too many requests: wait Retry-After seconds'],
+    ['502', 'Google Drive / S3 trả lỗi (STORAGE_PROVIDER_ERROR)', 'Google Drive / S3 failed (STORAGE_PROVIDER_ERROR)'],
+  ]
+  return (
+    <section className="api-section overview-section" id="overview">
+      <div className="doc-column">
+        <h2 className="endpoint-title">Tổng quan API HCDrive</h2>
+        <div className="endpoint-subtitle">HCDrive REST API · {total} endpoint</div>
+        <p className="endpoint-desc">
+          Mọi endpoint nhận và trả JSON (trừ tải lên multipart và các luồng tệp). Đường dẫn trong tài liệu tính từ base URL bên dưới;
+          khi chạy Docker một container, API có ở cả <code>/api/…</code> và ở gốc <code>/…</code>.
+        </p>
+
+        <div className="section-title"><span>Base URL</span></div>
+        <pre className="overview-code">{baseUrl}</pre>
+
+        <div className="section-title"><span>Xác thực</span></div>
+        <ul className="overview-list">
+          <li><b>Access token (Bearer):</b> lấy từ <code>POST /auth/login</code>, gửi trong header <code>Authorization: Bearer &lt;accessToken&gt;</code>. Hết hạn thì đổi token mới bằng <code>POST /auth/refresh</code> với refresh token.</li>
+          <li><b>Khoá API:</b> dạng <code>9d_live_…</code>, tạo ở Cài đặt → Khoá API, chỉ dùng cho <code>POST /api/v1/uploads</code> (scope <code>files:upload</code>). Máy chủ chỉ lưu bản băm; khoá hiện một lần khi tạo.</li>
+          <li><b>Admin:</b> route <code>/system/*</code> cần access token của quản trị viên (<code>ADMIN_EMAILS</code> hoặc người đăng ký đầu tiên).</li>
+          <li><b>Public:</b> link chia sẻ, ảnh thu nhỏ và URL đã ký (<code>/library/stream/…</code>, <code>/library/download/…</code>) không cần header — chính token trên URL là quyền truy cập, và nó hết hạn sau vài giờ.</li>
+        </ul>
+
+        <div className="section-title"><span>Quy ước dữ liệu</span></div>
+        <ul className="overview-list">
+          <li>ID là UUID v4. Nhiều route tệp cũng nhận ID tệp trên Google Drive.</li>
+          <li>Kích thước tính bằng byte và luôn là <b>chuỗi</b> (<code>"sizeBytes": "1048576"</code>) vì có thể vượt giới hạn số của JavaScript.</li>
+          <li>Thời gian theo ISO 8601 UTC, ví dụ <code>2026-11-03T08:30:00.000Z</code>.</li>
+          <li>Lỗi luôn có dạng <code>{'{ "code": "FILE_NOT_FOUND", "message": "…" }'}</code>; dựa vào <code>code</code> để xử lý, <code>message</code> chỉ để hiển thị.</li>
+          <li>Giới hạn tần suất: mặc định 2000 request / 15 phút cho mỗi người dùng (hoặc mỗi IP khi chưa đăng nhập); đăng nhập và đăng ký có giới hạn riêng chặt hơn.</li>
+        </ul>
+
+        <div className="section-title"><span>Mã trạng thái</span></div>
+        <div className="param-table-wrapper">
+          <table className="param-table">
+            <thead><tr><th>HTTP</th><th>Ý nghĩa</th></tr></thead>
+            <tbody>
+              {rows.map(([code, vi, en]) => (
+                <tr key={code}>
+                  <td><span className="param-name">{code}</span></td>
+                  <td><div className="param-desc">{vi}<div className="param-desc-en">{en}</div></div></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div className="code-column">
+        <div className="code-card">
+          <div className="code-card-header"><div className="code-tabs"><span className="code-tab-btn active">Bắt đầu nhanh</span></div></div>
+          <pre className="code-card-body code-req">{`# 1. Đăng nhập
+curl -X POST "${baseUrl}/auth/login" \\
+  -H "Content-Type: application/json" \\
+  -d '{"email":"a@example.com","password":"..."}'
+
+# 2. Gọi API bằng access token
+curl "${baseUrl}/files?q=report" \\
+  -H "Authorization: Bearer <accessToken>"
+
+# 3. Hết hạn (401) → lấy token mới
+curl -X POST "${baseUrl}/auth/refresh" \\
+  -H "Content-Type: application/json" \\
+  -d '{"refreshToken":"<refreshToken>"}'`}</pre>
+        </div>
+        <div className="code-card">
+          <div className="code-card-header"><div className="code-tabs"><span className="code-tab-btn active">Dạng lỗi</span></div></div>
+          <pre className="code-card-body code-res-400">{`HTTP/1.1 429 Too Many Requests
+Retry-After: 42
+
+{
+  "code": "RATE_LIMITED",
+  "message": "Quá nhiều yêu cầu. Thử lại sau 42 giây."
+}`}</pre>
+        </div>
+      </div>
+    </section>
   )
 }

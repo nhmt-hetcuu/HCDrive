@@ -63,7 +63,7 @@ async function findSharedFile(token: string) {
     where: { enabled: true, AND: [{ OR: [{ token }, { tokenHash: hashToken(token) }] }, { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] }] },
     include: { file: { include: { connectedAccount: true } } },
   })
-  if (!share || share.file.status !== 'active') throw new Error('Shared file not found')
+  if (!share || share.file.status !== 'active') throw Object.assign(new Error('Shared file not found'), { status: 404, code: 'SHARE_NOT_FOUND' })
   return share.file
 }
 
