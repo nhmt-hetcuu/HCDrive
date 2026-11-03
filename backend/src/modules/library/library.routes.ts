@@ -8,7 +8,8 @@ import { prisma } from '../../config/prisma.js'
 import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.js'
 import { ownedBy, requireOwned, type OwnedRequest } from '../../middleware/ownership.js'
 import { ensureGoogleAppFolder, getAuthedGoogleClient, getGoogleDriveClient, syncGoogleAppFolderFiles } from '../google/google.service.js'
-import { normalizeHeaders } from '../files/stream-google-file.js'
+import { googleDownloadExportMimeTypes, normalizeHeaders, withExtension } from '../files/stream-google-file.js'
+import { ZipArchive } from 'archiver'
 import { getAccountProxyUrl, getUndiciDispatcher } from '../../utils/proxy.js'
 import { noteGoogleError } from '../../utils/google-backoff.js'
 import { signId, verifySignedId } from '../../utils/signed-url.js'
@@ -167,12 +168,150 @@ libraryRouter.get('/stream/:token', async (req, res, next) => {
       if (value) res.setHeader(header, value)
     }
     res.setHeader('Accept-Ranges', 'bytes')
-    res.setHeader('Content-Disposition', 'inline')
+    // ?download=<name>: save as a file instead of playing (the name is cosmetic; the token decides the file).
+    const downloadName = typeof req.query.download === 'string' && req.query.download.trim() ? req.query.download.slice(0, 200).replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_') : null
+    res.setHeader('Content-Disposition', downloadName ? `attachment; filename="${downloadName.replace(/[^\x20-\x7e]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(downloadName)}` : 'inline')
     res.setHeader('Cache-Control', 'private, max-age=3600')
     if (!response.body) return res.end()
     await pipeline(Readable.fromWeb(response.body as any), res).catch(() => {
       if (!res.destroyed) res.destroy()
     })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+// ---- Download a course (or one chapter) as a ZIP. Signed URL, so the browser saves it as it streams. ----
+// Only what the owner lets this account download goes in; the rest is listed in a text file inside.
+
+const ZIP_FIELDS = 'nextPageToken,files(id,name,mimeType,resourceKey,capabilities(canDownload),shortcutDetails(targetId,targetMimeType,targetResourceKey))'
+
+type ZipEntry = { id: string; resourceKey: string | null; path: string; mimeType: string }
+
+/** A name that is safe as a path segment inside a ZIP on Windows, macOS and Linux. */
+function zipSafeName(name: string | null | undefined) {
+  const cleaned = (name ?? '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').replace(/[. ]+$/, '').trim()
+  return cleaned || 'untitled'
+}
+
+async function collectZipEntries(account: ConnectedAccount, drive: drive_v3.Drive, folderId: string, resourceKey: string | null, prefix: string, entries: ZipEntry[], skipped: string[], depth = 0) {
+  if (depth > 20) return
+  const children: drive_v3.Schema$File[] = []
+  let pageToken: string | undefined
+  do {
+    const page: { data: drive_v3.Schema$FileList } = await withRetry(account.id, () => drive.files.list({
+      q: `'${folderId}' in parents and trashed = false`,
+      fields: ZIP_FIELDS,
+      pageSize: 1000,
+      pageToken,
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+    }, { headers: resourceKeyHeaders(folderId, resourceKey) }))
+    children.push(...(page.data.files ?? []))
+    pageToken = page.data.nextPageToken ?? undefined
+  } while (pageToken)
+
+  children.sort((a, b) => naturalName.compare(a.name ?? '', b.name ?? ''))
+  const used = new Set<string>()
+  for (const child of children) {
+    const id = child.shortcutDetails?.targetId ?? child.id
+    if (!id) continue
+    const mimeType = child.shortcutDetails?.targetMimeType ?? child.mimeType ?? 'application/octet-stream'
+    const key = child.shortcutDetails ? child.shortcutDetails.targetResourceKey ?? null : child.resourceKey ?? null
+    const exportTarget = googleDownloadExportMimeTypes[mimeType]
+    let name = zipSafeName(child.name)
+    if (exportTarget) name = withExtension(name, exportTarget.extension)
+    // Two items with the same name in one folder: "name (2).ext".
+    for (let n = 2; used.has(name.toLowerCase()); n += 1) name = name.replace(/( \(\d+\))?(\.[^.]*)?$/, (_m, _d, ext = '') => ` (${n})${ext}`)
+    used.add(name.toLowerCase())
+
+    if (mimeType === FOLDER_MIME) {
+      await collectZipEntries(account, drive, id, key, `${prefix}${name}/`, entries, skipped, depth + 1)
+    } else if (mimeType.startsWith('application/vnd.google-apps.') && !exportTarget) {
+      skipped.push(`${prefix}${name} (loại tệp Google không tải được)`)
+    } else if (!child.shortcutDetails && child.capabilities?.canDownload === false) {
+      skipped.push(`${prefix}${name} (người chia sẻ chặn tải xuống)`)
+    } else {
+      entries.push({ id, resourceKey: key, path: `${prefix}${name}`, mimeType })
+    }
+  }
+}
+
+libraryRouter.get('/download/:token', async (req, res, next) => {
+  try {
+    const signed = verifySignedId('library-zip', String(req.params.token))
+    const [linkId, folderPart] = signed?.split('~') ?? []
+    if (!linkId || !folderPart || (folderPart !== 'root' && !DRIVE_ID.test(folderPart))) return res.status(404).json({ code: 'NOT_FOUND', message: 'Not found.' })
+    const link = await prisma.savedLink.findUnique({ where: { id: linkId } })
+    if (!link) return res.status(404).json({ code: 'NOT_FOUND', message: 'Not found.' })
+    const account = await accountForLink(link)
+    if (!account) return noAccess(res)
+
+    const baseName = zipSafeName(link.teacher ? `${link.title} - ${link.teacher}` : link.title)
+    // A single shared file: plain download through the stream route.
+    if (link.mimeType !== FOLDER_MIME) {
+      const target = streamPath(link.id, link.driveFileId, link.resourceKey).replace('/library/', '../')
+      return res.redirect(`${target}${target.includes('?') ? '&' : '?'}download=${encodeURIComponent(link.title)}`)
+    }
+
+    const rk = typeof req.query.rk === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(req.query.rk) ? req.query.rk : null
+    const rootId = folderPart === 'root' ? link.driveFileId : folderPart
+    const drive = await driveFor(account)
+    const entries: ZipEntry[] = []
+    const skipped: string[] = []
+    await collectZipEntries(account, drive, rootId, folderPart === 'root' ? link.resourceKey : rk, '', entries, skipped)
+    if (entries.length === 0 && skipped.length === 0) return res.status(404).json({ code: 'FOLDER_EMPTY', message: 'Khóa học không có tệp nào để tải.' })
+
+    // The chapter name only names the file; the signed folder id decides what goes in.
+    const chapter = typeof req.query.name === 'string' && req.query.name.trim() ? zipSafeName(req.query.name.slice(0, 150)) : null
+    const zipName = folderPart === 'root' || !chapter ? baseName : `${baseName} - ${chapter}`
+    res.setHeader('Content-Type', 'application/zip')
+    res.setHeader('Content-Disposition', `attachment; filename="${zipName.replace(/[^\x20-\x7e]/g, '_')}.zip"; filename*=UTF-8''${encodeURIComponent(zipName)}.zip`)
+    res.setHeader('Cache-Control', 'no-store')
+
+    // Videos do not shrink, so entries are stored, not compressed: less CPU, same size.
+    const archive = new ZipArchive({ store: true })
+    let closed = false
+    req.on('close', () => {
+      closed = true
+      archive.abort()
+    })
+    archive.on('error', () => {
+      if (!res.destroyed) res.destroy()
+    })
+    archive.pipe(res)
+
+    for (const entry of entries) {
+      if (closed) break
+      try {
+        // Asked per file: a long download outlives the hour an access token lasts.
+        const auth = await getAuthedGoogleClient(account)
+        const exportTarget = googleDownloadExportMimeTypes[entry.mimeType]
+        const url = exportTarget
+          ? `https://www.googleapis.com/drive/v3/files/${entry.id}/export?mimeType=${encodeURIComponent(exportTarget.mimeType)}`
+          : `https://www.googleapis.com/drive/v3/files/${entry.id}?alt=media&supportsAllDrives=true`
+        const response = await fetch(url, {
+          dispatcher: getUndiciDispatcher(getAccountProxyUrl(account)),
+          headers: { ...normalizeHeaders(await auth.getRequestHeaders()), ...resourceKeyHeaders(entry.id, entry.resourceKey) },
+        } as any)
+        if (!response.ok || !response.body) {
+          await response.body?.cancel().catch(() => undefined)
+          skipped.push(`${entry.path} (${response.status === 403 ? 'người chia sẻ chặn tải xuống' : `lỗi ${response.status}`})`)
+          continue
+        }
+        const added = new Promise((resolve) => archive.once('entry', resolve))
+        archive.append(Readable.fromWeb(response.body as any), { name: `${zipName}/${entry.path}` })
+        await added
+      } catch (error) {
+        noteGoogleError(account.id, error)
+        skipped.push(`${entry.path} (lỗi: ${error instanceof Error ? error.message : String(error)})`)
+      }
+    }
+    if (closed) return
+    if (skipped.length) {
+      archive.append(`Các tệp sau không có trong file ZIP:\r\n\r\n${skipped.join('\r\n')}\r\n`, { name: `${zipName}/_KHONG_TAI_DUOC.txt` })
+    }
+    await archive.finalize()
   } catch (error) {
     return next(error)
   }
@@ -484,6 +623,27 @@ libraryRouter.delete('/:id/share', loadOwnedLink, async (req: OwnedRequest<Saved
   try {
     await prisma.savedLink.update({ where: { id: req.owned!.id }, data: { shareTokenHash: null, shareTokenEncrypted: null } })
     return res.json({ ok: true })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+const downloadLinkSchema = z.object({
+  folderId: z.string().regex(DRIVE_ID).optional(),
+  rk: z.string().regex(/^[A-Za-z0-9_-]{1,200}$/).optional(),
+  name: z.string().max(150).optional(),
+})
+
+/** A signed URL that downloads the course (or the chapter `folderId`) as a ZIP; valid for a few hours. */
+libraryRouter.post('/:id/download-link', loadOwnedLink, (req: OwnedRequest<SavedLink>, res, next) => {
+  try {
+    const body = downloadLinkSchema.parse(req.body ?? {})
+    const link = req.owned!
+    const token = signId('library-zip', `${link.id}~${body.folderId ?? 'root'}`)
+    const query = new URLSearchParams()
+    if (body.folderId && body.rk) query.set('rk', body.rk)
+    if (body.folderId && body.name) query.set('name', body.name)
+    return res.json({ path: `/library/download/${token}${query.size ? `?${query}` : ''}` })
   } catch (error) {
     return next(error)
   }

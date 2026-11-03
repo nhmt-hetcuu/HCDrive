@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { CheckCircle2, Copy, ExternalLink, HardDriveDownload, Link2, Loader2 } from 'lucide-react'
-import { apiFetch } from '@/lib/api'
+import { API_URL, apiFetch } from '@/lib/api'
 import { copyText } from '@/lib/clipboard'
 import { useSnackbar } from '@/context/SnackbarContext'
 import { DummyModal } from '@/components/drive/DummyModal'
@@ -8,6 +8,27 @@ import { Button } from '@/components/ui/button'
 
 // Dialogs of the Courses page (pages/LibraryPage.tsx): the internal share link, and copying a course
 // into the user's own Drive.
+
+/**
+ * Downloads the course (or one chapter) as a ZIP. The server hands out a signed URL, so the browser saves
+ * the file as it streams instead of holding gigabytes of video in memory first.
+ */
+export async function startCourseDownload(linkId: string, chapter?: { folderId?: string; rk?: string; name?: string }) {
+  const data = await apiFetch<{ path: string }>(`/library/${linkId}/download-link`, { method: 'POST', body: JSON.stringify(chapter ?? {}) })
+  const anchor = document.createElement('a')
+  anchor.href = `${API_URL}${data.path}`
+  anchor.rel = 'noopener'
+  // Keeps the page in place; the server's Content-Disposition names the file.
+  anchor.download = ''
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+}
+
+/** One lesson as a file: the signed stream URL, asked to download instead of play. */
+export function lessonDownloadUrl(streamUrl: string, name: string) {
+  return `${API_URL}${streamUrl}${streamUrl.includes('?') ? '&' : '?'}download=${encodeURIComponent(name)}`
+}
 
 type CourseRef = { id: string; title: string; teacher: string; shared: boolean; isFolder: boolean }
 

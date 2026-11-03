@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type SyntheticEvent } from 'react'
+import { createPortal } from 'react-dom'
 import { useSearchParams } from 'react-router-dom'
 import {
   ArrowLeft,
   CheckCircle2,
   ChevronRight,
+  Download,
   Circle,
   ExternalLink,
   Folder,
@@ -12,6 +14,7 @@ import {
   Inbox,
   Link2,
   Loader2,
+  MoreVertical,
   Pencil,
   PlayCircle,
   Plus,
@@ -27,7 +30,8 @@ import { getFileVisual } from '@/components/drive/DriveGridView'
 import { DummyModal } from '@/components/drive/DummyModal'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { SaveToDriveModal, ShareCourseModal } from '@/components/drive/LibraryDialogs'
+import { SaveToDriveModal, ShareCourseModal, lessonDownloadUrl, startCourseDownload } from '@/components/drive/LibraryDialogs'
+import { useMenuPosition } from '@/hooks/useMenuPosition'
 
 // Library: Drive links other people shared with the user (a bought course, a lesson folder, a document),
 // grouped into courses, with lessons played inside HCDrive and progress kept per lesson.
@@ -102,6 +106,17 @@ export function LibraryPage() {
   const [editing, setEditing] = useState<SavedLink | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null)
   const [sharing, setSharing] = useState<SavedLink | null>(null)
+  const [savingToDrive, setSavingToDrive] = useState<SavedLink | null>(null)
+
+  function cardAction(link: SavedLink, action: CardAction) {
+    if (action === 'open') open(link)
+    else if (action === 'download') startCourseDownload(link.id).catch((error) => showSnackbar(errorText(error, vi ? 'Không tải được' : 'Could not download')))
+    else if (action === 'save') setSavingToDrive(link)
+    else if (action === 'share') setSharing(link)
+    else if (action === 'edit') setEditing(link)
+    else if (action === 'drive') window.open(link.url, '_blank', 'noopener')
+    else if (action === 'remove') remove(link).catch(() => undefined)
+  }
 
   const load = useCallback(async () => {
     try {
@@ -226,7 +241,7 @@ export function LibraryPage() {
             </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
               {items.map((link) => (
-                <LinkCard key={link.id} link={link} vi={vi} onOpen={() => open(link)} onEdit={() => setEditing(link)} onShare={() => setSharing(link)} onRemove={() => remove(link)} />
+                <LinkCard key={link.id} link={link} vi={vi} onAction={(action) => cardAction(link, action)} />
               ))}
             </div>
           </section>
@@ -237,6 +252,7 @@ export function LibraryPage() {
       <SharedPickerModal open={pickerOpen} vi={vi} accounts={accounts} savedIds={new Set(links.map((link) => link.driveFileId))} collections={collections.map(([name]) => name).filter(Boolean)} onClose={() => setPickerOpen(false)} onDone={() => { setPickerOpen(false); load().catch(() => undefined) }} />
       <EditLinkModal link={editing} vi={vi} collections={collections.map(([name]) => name).filter(Boolean)} onClose={() => setEditing(null)} onSaved={(link) => { setLinks((current) => current.map((item) => (item.id === link.id ? link : item))); setEditing(null) }} />
       <ShareCourseModal link={sharing} vi={vi} onClose={() => setSharing(null)} onChanged={(id, shared) => setLinks((current) => current.map((item) => (item.id === id ? { ...item, shared } : item)))} />
+      <SaveToDriveModal link={savingToDrive} vi={vi} onClose={() => setSavingToDrive(null)} />
       <RenameCollectionModal name={renaming} vi={vi} onClose={() => setRenaming(null)} onDone={(from, to) => { setLinks((current) => current.map((link) => (link.collection === from ? { ...link, collection: to } : link))); if (activeCollection === from) setActiveCollection(to || UNGROUPED); setRenaming(null) }} />
     </div>
   )
@@ -278,52 +294,107 @@ function CollectionChip({ active, onClick, label, count }: { active: boolean; on
   )
 }
 
-function LinkCard({ link, vi, onOpen, onEdit, onShare, onRemove }: { link: SavedLink; vi: boolean; onOpen: () => void; onEdit: () => void; onShare: () => void; onRemove: () => void }) {
+type CardAction = 'open' | 'download' | 'save' | 'share' | 'edit' | 'drive' | 'remove'
+
+function LinkCard({ link, vi, onAction }: { link: SavedLink; vi: boolean; onAction: (action: CardAction) => void }) {
   const visual = link.isFolder ? { icon: Folder, color: 'text-slate-600 dark:text-slate-300', bg: 'bg-slate-100 dark:bg-slate-800' } : getFileVisual(link.mimeType)
   const Icon = visual.icon
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  const owner = link.ownerName || link.ownerEmail
+
   return (
-    <div className="group relative flex cursor-pointer flex-col rounded-2xl border border-slate-200/80 bg-white p-4 transition hover:border-slate-300 hover:shadow-sm dark:border-slate-800 dark:bg-[#1e1f20] dark:hover:border-slate-700" onClick={onOpen}>
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => onAction('open')}
+      onKeyDown={(event) => { if (event.key === 'Enter') onAction('open') }}
+      onContextMenu={(event) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY }) }}
+      className="group flex cursor-pointer flex-col rounded-2xl border border-slate-200/80 bg-white p-4 transition hover:border-slate-300 hover:shadow-sm focus-visible:outline-2 focus-visible:outline-[#0b57d0] dark:border-slate-800 dark:bg-[#1e1f20] dark:hover:border-slate-700"
+    >
       <div className="flex items-start gap-3">
         <div className={cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-xl', visual.bg)}>
           <Icon className={cn('h-5 w-5', visual.color)} />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="line-clamp-2 text-sm font-medium text-slate-800 dark:text-slate-100" title={link.title}>{link.title}</p>
-          <p className="mt-0.5 truncate text-xs text-slate-500 dark:text-slate-400">
-            {link.ownerName || link.ownerEmail ? `${vi ? 'Chia sẻ bởi' : 'Shared by'} ${link.ownerName || link.ownerEmail}` : link.isFolder ? (vi ? 'Thư mục' : 'Folder') : vi ? 'Tệp' : 'File'}
-          </p>
+          <p className="line-clamp-2 text-sm font-medium leading-5 text-slate-800 dark:text-slate-100" title={link.title}>{link.title}</p>
+          {link.teacher ? (
+            <p className="mt-1 flex items-center gap-1 text-xs text-slate-600 dark:text-slate-300">
+              <UserRound className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+              <span className="truncate">{link.teacher}</span>
+            </p>
+          ) : null}
+          {owner ? <p className="mt-0.5 truncate text-xs text-slate-500 dark:text-slate-400">{vi ? 'Chia sẻ bởi' : 'Shared by'} {owner}</p> : null}
         </div>
+        {/* Actions live in a menu, so they never cover the course name. */}
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation()
+            const rect = event.currentTarget.getBoundingClientRect()
+            setMenu({ x: rect.right - 224, y: rect.bottom + 4 })
+          }}
+          className="-mr-1.5 -mt-1 shrink-0 rounded-full p-1.5 text-slate-500 hover:bg-slate-100 dark:hover:bg-[#282a2c] cursor-pointer"
+          title={vi ? 'Tuỳ chọn' : 'Options'}
+          aria-label={vi ? 'Tuỳ chọn' : 'Options'}
+        >
+          <MoreVertical className="h-4 w-4" />
+        </button>
       </div>
-      {link.teacher ? (
-        <p className="mt-2 flex items-center gap-1 truncate text-xs text-slate-600 dark:text-slate-300">
-          <UserRound className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-          <span className="truncate">{vi ? 'Giảng viên' : 'Teacher'}: {link.teacher}</span>
-        </p>
-      ) : null}
       {link.note ? <p className="mt-2 line-clamp-2 text-xs text-slate-500 dark:text-slate-400">{link.note}</p> : null}
-      <div className="mt-3 flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
+      {!link.account ? <p className="mt-2 text-[11px] text-amber-700 dark:text-amber-300">{vi ? 'Tài khoản Google mở link này đã bị gỡ; HCDrive sẽ thử tài khoản khác khi mở.' : 'The Google account for this link was removed; another one is tried on open.'}</p> : null}
+      <div className="mt-auto flex items-center justify-between gap-2 pt-3 text-[11px] text-slate-500 dark:text-slate-400">
         <span className="flex items-center gap-1">
           <CheckCircle2 className={cn('h-3.5 w-3.5', link.completedCount > 0 ? 'text-emerald-600' : 'text-slate-300 dark:text-slate-600')} />
           {vi ? `Đã học ${link.completedCount} bài` : `${link.completedCount} done`}
         </span>
-        <span>{link.lastOpenedAt ? `${vi ? 'Mở' : 'Opened'} ${formatDriveDate(link.lastOpenedAt, vi ? 'vi' : 'en')}` : vi ? 'Chưa mở' : 'Not opened'}</span>
+        <span className="flex items-center gap-2">
+          {link.shared ? <span className="flex items-center gap-0.5 text-[#0b57d0] dark:text-[#a8c7fa]" title={vi ? 'Đang có link chia sẻ' : 'Has a share link'}><Share2 className="h-3 w-3" />{vi ? 'Đã chia sẻ' : 'Shared'}</span> : null}
+          <span>{link.lastOpenedAt ? `${vi ? 'Mở' : 'Opened'} ${formatDriveDate(link.lastOpenedAt, vi ? 'vi' : 'en')}` : vi ? 'Chưa mở' : 'Not opened'}</span>
+        </span>
       </div>
-      {!link.account ? <p className="mt-2 text-[11px] text-amber-700 dark:text-amber-300">{vi ? 'Tài khoản Google mở link này đã bị gỡ; HCDrive sẽ thử tài khoản khác khi mở.' : 'The Google account for this link was removed; another one is tried on open.'}</p> : null}
-      <div className="absolute right-2 top-2 flex gap-0.5 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100" onClick={(event) => event.stopPropagation()}>
-        <a href={link.url} target="_blank" rel="noreferrer" className="rounded-full p-1.5 text-slate-500 hover:bg-slate-100 dark:hover:bg-[#282a2c]" title={vi ? 'Mở trên Google Drive' : 'Open in Google Drive'} aria-label={vi ? 'Mở trên Google Drive' : 'Open in Google Drive'}>
-          <ExternalLink className="h-4 w-4" />
-        </a>
-        <button type="button" onClick={onShare} className={cn('rounded-full p-1.5 hover:bg-slate-100 dark:hover:bg-[#282a2c] cursor-pointer', link.shared ? 'text-[#0b57d0] dark:text-[#a8c7fa]' : 'text-slate-500')} title={vi ? 'Chia sẻ trong HCDrive' : 'Share in HCDrive'} aria-label={vi ? 'Chia sẻ trong HCDrive' : 'Share in HCDrive'}>
-          <Share2 className="h-4 w-4" />
-        </button>
-        <button type="button" onClick={onEdit} className="rounded-full p-1.5 text-slate-500 hover:bg-slate-100 dark:hover:bg-[#282a2c] cursor-pointer" title={vi ? 'Sửa' : 'Edit'} aria-label={vi ? 'Sửa' : 'Edit'}>
-          <Pencil className="h-4 w-4" />
-        </button>
-        <button type="button" onClick={onRemove} className="rounded-full p-1.5 text-slate-500 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/40 cursor-pointer" title={vi ? 'Xoá khỏi thư viện' : 'Remove from library'} aria-label={vi ? 'Xoá khỏi thư viện' : 'Remove from library'}>
-          <Trash2 className="h-4 w-4" />
-        </button>
-      </div>
+      {menu ? <CardMenu at={menu} vi={vi} isFolder={link.isFolder} onClose={() => setMenu(null)} onPick={(action) => { setMenu(null); onAction(action) }} /> : null}
     </div>
+  )
+}
+
+function CardMenu({ at, vi, isFolder, onClose, onPick }: { at: { x: number; y: number }; vi: boolean; isFolder: boolean; onClose: () => void; onPick: (action: CardAction) => void }) {
+  const { menuRef, style } = useMenuPosition({ x: at.x, y: at.y, onClose })
+  useEffect(() => {
+    function onDown(event: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) onClose()
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [menuRef, onClose])
+
+  const items: Array<{ action: CardAction; icon: typeof Folder; label: string; danger?: boolean; dividerBefore?: boolean }> = [
+    { action: 'open', icon: PlayCircle, label: vi ? 'Mở khóa học' : 'Open course' },
+    { action: 'download', icon: Download, label: isFolder ? (vi ? 'Tải xuống (ZIP)' : 'Download (ZIP)') : vi ? 'Tải xuống' : 'Download', dividerBefore: true },
+    { action: 'save', icon: HardDriveDownload, label: vi ? 'Lưu vào Drive của tôi' : 'Save to my Drive' },
+    { action: 'share', icon: Share2, label: vi ? 'Chia sẻ trong HCDrive' : 'Share in HCDrive' },
+    { action: 'edit', icon: Pencil, label: vi ? 'Sửa tên, khóa, giảng viên' : 'Edit name, course, teacher', dividerBefore: true },
+    { action: 'drive', icon: ExternalLink, label: vi ? 'Mở trên Google Drive' : 'Open in Google Drive' },
+    { action: 'remove', icon: Trash2, label: vi ? 'Xoá khỏi thư viện' : 'Remove from library', danger: true, dividerBefore: true },
+  ]
+
+  return createPortal(
+    <div ref={menuRef} style={{ ...style, zIndex: 9999 }} role="menu" onClick={(event) => event.stopPropagation()} className="w-56 rounded-xl border border-slate-200 bg-white py-1.5 shadow-lg dark:border-slate-700 dark:bg-[#2d2e30]">
+      {items.map((item) => (
+        <div key={item.action}>
+          {item.dividerBefore ? <div className="my-1 h-px bg-slate-200 dark:bg-slate-700" /> : null}
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => onPick(item.action)}
+            className={cn('flex w-full items-center gap-3 px-4 py-2 text-left text-sm cursor-pointer hover:bg-slate-100 dark:hover:bg-[#3c3d3f]', item.danger ? 'text-red-600 dark:text-red-400' : 'text-slate-700 dark:text-slate-200')}
+          >
+            <item.icon className="h-4 w-4 shrink-0" />
+            {item.label}
+          </button>
+        </div>
+      ))}
+    </div>,
+    document.body,
   )
 }
 
@@ -627,6 +698,13 @@ function LessonView({ link, vi, onBack, onEdit, editing, onEdited, onCloseEdit, 
     }
   }, [link.id, showSnackbar, vi])
 
+  function downloadHere() {
+    const target = path.length > 1 ? { folderId: folder.id ?? undefined, rk: folder.rk ?? undefined, name: folder.name } : undefined
+    startCourseDownload(link.id, target)
+      .then(() => showSnackbar(vi ? 'Đang tải xuống… (file ZIP lớn có thể mất một lúc mới bắt đầu)' : 'Downloading… (a large ZIP can take a moment to start)'))
+      .catch((err) => showSnackbar(errorText(err, vi ? 'Không tải được' : 'Could not download')))
+  }
+
   function openItem(item: Lesson) {
     if (item.isFolder) {
       setCurrent(null)
@@ -661,6 +739,9 @@ function LessonView({ link, vi, onBack, onEdit, editing, onEdited, onCloseEdit, 
         {link.teacher ? <span className="flex items-center gap-1 text-xs text-slate-600 dark:text-slate-300"><UserRound className="h-3.5 w-3.5 text-slate-400" />{link.teacher}</span> : null}
         <Button size="sm" variant="ghost" onClick={onEdit}><Pencil className="mr-1.5 h-4 w-4" />{vi ? 'Sửa' : 'Edit'}</Button>
         <Button size="sm" variant="ghost" onClick={() => setShareOpen(true)} className={cn(shared && 'text-[#0b57d0] dark:text-[#a8c7fa]')}><Share2 className="mr-1.5 h-4 w-4" />{vi ? 'Chia sẻ' : 'Share'}</Button>
+        <Button size="sm" variant="ghost" onClick={downloadHere} title={path.length > 1 ? (vi ? 'Tải chương đang mở thành file ZIP' : 'Download this chapter as a ZIP') : vi ? 'Tải cả khóa học thành file ZIP' : 'Download the whole course as a ZIP'}>
+          <Download className="mr-1.5 h-4 w-4" />{path.length > 1 ? (vi ? 'Tải chương này' : 'Download chapter') : vi ? 'Tải khóa học' : 'Download course'}
+        </Button>
         <Button size="sm" variant="ghost" onClick={() => setSaveOpen(true)}><HardDriveDownload className="mr-1.5 h-4 w-4" />{vi ? 'Lưu vào Drive' : 'Save to Drive'}</Button>
         <a href={link.url} target="_blank" rel="noreferrer" className="inline-flex h-8 items-center rounded-full px-3 text-xs text-[#0b57d0] hover:bg-[#0b57d0]/10 dark:text-[#a8c7fa]">
           <ExternalLink className="mr-1.5 h-4 w-4" />Google Drive
@@ -677,6 +758,11 @@ function LessonView({ link, vi, onBack, onEdit, editing, onEdited, onCloseEdit, 
                 <CheckCircle2 className="mr-1.5 h-4 w-4" />
                 {items?.find((item) => item.id === current.id)?.completed ? (vi ? 'Đã học' : 'Done') : vi ? 'Đánh dấu đã học' : 'Mark as done'}
               </Button>
+              {current.streamUrl ? (
+                <a href={lessonDownloadUrl(current.streamUrl, current.name)} className="inline-flex h-8 items-center rounded-full border border-[#747775]/60 px-3.5 text-xs text-slate-800 hover:bg-[#f0f4f9] dark:border-[#8e918f]/60 dark:text-slate-100 dark:hover:bg-[#282a2c]">
+                  <Download className="mr-1.5 h-4 w-4" />{vi ? 'Tải bài này' : 'Download'}
+                </a>
+              ) : null}
               {nextLesson ? (
                 <Button size="sm" onClick={() => setCurrent(nextLesson)}>
                   <SkipForward className="mr-1.5 h-4 w-4" />{vi ? 'Bài tiếp' : 'Next'}

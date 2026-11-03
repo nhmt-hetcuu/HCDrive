@@ -249,6 +249,7 @@ Library (links others shared with the user, e.g. bought courses):
 - `PUT /library/:id/progress`
 - `GET|POST|DELETE /library/:id/share` (internal share link `/library/s/<token>`; recipients open the course with their own Google access)
 - `GET /library/shared/:token`, `POST /library/shared/:token/save`
+- `POST /library/:id/download-link` → signed `GET /library/download/:token` (course or chapter as a ZIP; files the owner blocks from download are listed in `_KHONG_TAI_DUOC.txt`)
 - `GET|POST /library/:id/save-to-drive` (background copy of the course into the user's Drive; real copies, files the owner blocks from copying are skipped)
 - `GET /library/stream/:token` (signed, no auth header; only for files the owner allows downloading)
 
