@@ -5,7 +5,8 @@ import { z } from 'zod'
 import type { ConnectedAccount, SavedLink } from '@prisma/client'
 import type { drive_v3 } from 'googleapis'
 import { prisma } from '../../config/prisma.js'
-import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.js'
+import { optionalAuth, requireAuth, type AuthRequest } from '../../middleware/auth.middleware.js'
+import { verifyAccessToken } from '../../utils/jwt.js'
 import { ownedBy, requireOwned, type OwnedRequest } from '../../middleware/ownership.js'
 import { ensureGoogleAppFolder, getAuthedGoogleClient, getGoogleDriveClient, syncGoogleAppFolderFiles } from '../google/google.service.js'
 import { googleDownloadExportMimeTypes, normalizeHeaders, withExtension } from '../files/stream-google-file.js'
@@ -81,13 +82,134 @@ async function findAccountFor(userId: string, fileId: string, resourceKey: strin
 /** The account a saved link opens with; finds another one when it was removed or disconnected. */
 async function accountForLink(link: SavedLink): Promise<ConnectedAccount | null> {
   if (link.connectedAccountId) {
-    const account = await prisma.connectedAccount.findFirst({ where: { id: link.connectedAccountId, userId: link.userId, provider: 'google_drive', status: 'connected' } })
+    const account = await prisma.connectedAccount.findFirst({ where: { id: link.connectedAccountId, provider: 'google_drive', status: 'connected' } })
     if (account) return account
   }
   const found = await findAccountFor(link.userId, link.driveFileId, link.resourceKey)
   if (!found) return null
   await prisma.savedLink.update({ where: { id: link.id }, data: { connectedAccountId: found.account.id } })
   return found.account
+}
+
+export type ShareMeta = { token: string; allowDownload: boolean }
+
+export function parseShareMeta(raw: string | null): ShareMeta | null {
+  if (!raw) return null
+  try {
+    if (raw.startsWith('{')) {
+      const parsed = JSON.parse(raw)
+      return { token: String(parsed.token), allowDownload: parsed.allowDownload !== false }
+    }
+  } catch {
+    // fallback for raw token string
+  }
+  return { token: raw, allowDownload: true }
+}
+
+export function getLinkShareMeta(link: SavedLink): ShareMeta | null {
+  if (!link.shareTokenEncrypted) return null
+  try {
+    const raw = decryptText(link.shareTokenEncrypted)
+    return parseShareMeta(raw)
+  } catch {
+    return null
+  }
+}
+
+/** Attempts to bypass Google Drive download restrictions by fetching stream from preview player / videoplayback / export */
+async function attemptGoogleBypassStream(account: ConnectedAccount, fileId: string, resourceKey: string | null, range?: string): Promise<globalThis.Response | null> {
+  try {
+    const auth = await getAuthedGoogleClient(account)
+    const authHeaders = normalizeHeaders(await auth.getRequestHeaders())
+    const dispatcher = getUndiciDispatcher(getAccountProxyUrl(account))
+    const rkHeaders = resourceKeyHeaders(fileId, resourceKey)
+
+    // Method 1: Check Google Drive preview page for videoplayback / stream URLs
+    const previewUrl = `https://drive.google.com/file/d/${fileId}/preview${resourceKey ? `?resourcekey=${resourceKey}` : ''}`
+    const previewRes = await fetch(previewUrl, {
+      dispatcher,
+      headers: {
+        ...authHeaders,
+        ...rkHeaders,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      },
+    } as any)
+
+    if (previewRes.ok) {
+      const html = await previewRes.text().catch(() => '')
+      // 1. Matches direct videoplayback URL
+      const streamMatch = html.match(/(https?:\\\/\\\/[^\s"']+(?:googlevideo\.com|drive\.google\.com)\\\/videoplayback[^\s"']*)/i)
+        || html.match(/(https?:\/\/[^\s"']+(?:googlevideo\.com|drive\.google\.com)\/videoplayback[^\s"']*)/i)
+
+      if (streamMatch?.[1]) {
+        const streamUrl = streamMatch[1].replace(/\\u0026/g, '&').replace(/\\\//g, '/')
+        const videoRes = await fetch(streamUrl, {
+          dispatcher,
+          headers: {
+            ...authHeaders,
+            ...(range ? { Range: range } : {}),
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          },
+        } as any)
+        if (videoRes.ok) return videoRes
+      }
+
+      // 2. Check for fmt_stream_map in script tags
+      const fmtMatch = html.match(/"url_encoded_fmt_stream_map"\s*:\s*"([^"]+)"/) || html.match(/"fmt_stream_map"\s*:\s*"([^"]+)"/)
+      if (fmtMatch?.[1]) {
+        const rawMap = fmtMatch[1].replace(/\\u0026/g, '&')
+        const urls = rawMap.split(',').map((part) => {
+          const urlParam = part.split('&').find((p) => p.startsWith('url='))
+          return urlParam ? decodeURIComponent(urlParam.slice(4)) : null
+        }).filter(Boolean) as string[]
+        if (urls.length > 0) {
+          const fmtRes = await fetch(urls[0], {
+            dispatcher,
+            headers: {
+              ...(range ? { Range: range } : {}),
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            },
+          } as any)
+          if (fmtRes.ok) return fmtRes
+        }
+      }
+    }
+
+    // Method 2: Try uc?export=download&confirm=t
+    const ucUrl = `https://drive.google.com/uc?id=${fileId}&export=download&confirm=t${resourceKey ? `&resourcekey=${resourceKey}` : ''}`
+    const ucRes = await fetch(ucUrl, {
+      dispatcher,
+      headers: {
+        ...authHeaders,
+        ...rkHeaders,
+        ...(range ? { Range: range } : {}),
+      },
+      redirect: 'follow',
+    } as any)
+    if (ucRes.ok) {
+      const contentType = ucRes.headers.get('content-type') ?? ''
+      if (!contentType.includes('text/html') || ucRes.headers.get('content-disposition')?.includes('attachment')) {
+        return ucRes
+      }
+    }
+
+    // Method 3: Try Google Docs export for docs/sheets/slides
+    const drive = await driveFor(account)
+    const meta = await drive.files.get({ fileId, fields: 'mimeType,name', supportsAllDrives: true }, { headers: rkHeaders }).catch(() => null)
+    if (meta?.data.mimeType && googleDownloadExportMimeTypes[meta.data.mimeType]) {
+      const target = googleDownloadExportMimeTypes[meta.data.mimeType]
+      const expRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=${encodeURIComponent(target.mimeType)}`, {
+        dispatcher,
+        headers: { ...authHeaders, ...rkHeaders },
+      } as any)
+      if (expRes.ok) return expRes
+    }
+
+    return null
+  } catch {
+    return null
+  }
 }
 
 function noAccess(res: import('express').Response) {
@@ -107,7 +229,23 @@ function previewUrl(fileId: string, resourceKey?: string | null) {
 
 type LinkWithAccount = SavedLink & { connectedAccount: { id: string; email: string } | null; _count?: { progress: number } }
 
+function parseLinkNote(note: string) {
+  const isCourse = !note.includes('<!--isCourse:false-->')
+  const cleanNote = note.replace(/<!--isCourse:(true|false)-->/g, '').trim()
+  return { isCourse, cleanNote }
+}
+
+function formatNoteWithCourse(noteText: string | undefined, isCourse: boolean | undefined, existingNote = '') {
+  const clean = (noteText !== undefined ? noteText : existingNote).replace(/<!--isCourse:(true|false)-->/g, '').trim()
+  const courseFlag = isCourse !== undefined ? isCourse : !existingNote.includes('<!--isCourse:false-->')
+  if (!courseFlag) {
+    return clean ? `${clean} <!--isCourse:false-->` : '<!--isCourse:false-->'
+  }
+  return clean
+}
+
 function serializeLink(link: LinkWithAccount) {
+  const { isCourse, cleanNote } = parseLinkNote(link.note)
   return {
     id: link.id,
     driveFileId: link.driveFileId,
@@ -119,7 +257,8 @@ function serializeLink(link: LinkWithAccount) {
     ownerEmail: link.ownerEmail,
     collection: link.collection,
     teacher: link.teacher,
-    note: link.note,
+    note: cleanNote,
+    isCourse,
     shared: Boolean(link.shareTokenHash),
     lastOpenedAt: link.lastOpenedAt,
     createdAt: link.createdAt,
@@ -142,6 +281,33 @@ libraryRouter.get('/stream/:token', async (req, res, next) => {
     if (!linkId || !fileId || !DRIVE_ID.test(fileId)) return res.status(404).json({ code: 'NOT_FOUND', message: 'Not found.' })
     const link = await prisma.savedLink.findUnique({ where: { id: linkId } })
     if (!link) return res.status(404).json({ code: 'NOT_FOUND', message: 'Not found.' })
+
+    // Check if downloading is requested and whether sharing allows download
+    const downloadName = typeof req.query.download === 'string' && req.query.download.trim() ? req.query.download.slice(0, 200).replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_') : null
+    let shareMeta: ShareMeta | null = null
+    if (link.shareTokenEncrypted) {
+      try {
+        shareMeta = parseShareMeta(decryptText(link.shareTokenEncrypted))
+      } catch {
+        shareMeta = null
+      }
+    }
+    if (downloadName && shareMeta && shareMeta.allowDownload === false) {
+      const authHeader = req.header('Authorization')
+      let isOwner = false
+      if (authHeader?.startsWith('Bearer ')) {
+        try {
+          const payload = verifyAccessToken(authHeader.slice(7))
+          if (payload.sub === link.userId) isOwner = true
+        } catch {
+          // not owner
+        }
+      }
+      if (!isOwner) {
+        return res.status(403).json({ code: 'DOWNLOAD_BLOCKED', message: 'Người chia sẻ đã tắt tính năng tải xuống cho liên kết này.' })
+      }
+    }
+
     const account = await accountForLink(link)
     if (!account) return noAccess(res)
 
@@ -149,17 +315,21 @@ libraryRouter.get('/stream/:token', async (req, res, next) => {
     const resourceKey = fileId === link.driveFileId ? link.resourceKey : rk
     const auth = await getAuthedGoogleClient(account)
     const range = typeof req.headers.range === 'string' ? req.headers.range : undefined
-    const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&supportsAllDrives=true`, {
+    let response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&supportsAllDrives=true`, {
       dispatcher: getUndiciDispatcher(getAccountProxyUrl(account)),
       headers: { ...normalizeHeaders(await auth.getRequestHeaders()), ...resourceKeyHeaders(fileId, resourceKey), ...(range ? { Range: range } : {}) },
     } as any)
+
     if (!response.ok) {
-      const text = await response.text().catch(() => '')
-      if (response.status === 403 && /cannotDownloadFile|download/i.test(text)) {
-        return res.status(403).json({ code: 'DOWNLOAD_BLOCKED', message: 'Người chia sẻ đã chặn tải xuống tệp này, chỉ xem được trong trình xem của Google Drive.' })
+      // Attempt bypass for blocked Google Drive download
+      const bypass = await attemptGoogleBypassStream(account, fileId, resourceKey, range)
+      if (bypass && bypass.ok) {
+        response = bypass
+      } else {
+        const text = await response.text().catch(() => '')
+        noteGoogleError(account.id, { status: response.status, message: text })
+        return res.status(response.status === 401 ? 502 : response.status).json({ code: 'GOOGLE_FILE_STREAM_FAILED', message: text || response.statusText })
       }
-      noteGoogleError(account.id, { status: response.status, message: text })
-      return res.status(response.status === 401 ? 502 : response.status).json({ code: 'GOOGLE_FILE_STREAM_FAILED', message: text || response.statusText })
     }
 
     res.status(response.status)
@@ -169,7 +339,6 @@ libraryRouter.get('/stream/:token', async (req, res, next) => {
     }
     res.setHeader('Accept-Ranges', 'bytes')
     // ?download=<name>: save as a file instead of playing (the name is cosmetic; the token decides the file).
-    const downloadName = typeof req.query.download === 'string' && req.query.download.trim() ? req.query.download.slice(0, 200).replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_') : null
     res.setHeader('Content-Disposition', downloadName ? `attachment; filename="${downloadName.replace(/[^\x20-\x7e]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(downloadName)}` : 'inline')
     res.setHeader('Cache-Control', 'private, max-age=3600')
     if (!response.body) return res.end()
@@ -229,9 +398,8 @@ async function collectZipEntries(account: ConnectedAccount, drive: drive_v3.Driv
       await collectZipEntries(account, drive, id, key, `${prefix}${name}/`, entries, skipped, depth + 1)
     } else if (mimeType.startsWith('application/vnd.google-apps.') && !exportTarget) {
       skipped.push(`${prefix}${name} (loại tệp Google không tải được)`)
-    } else if (!child.shortcutDetails && child.capabilities?.canDownload === false) {
-      skipped.push(`${prefix}${name} (người chia sẻ chặn tải xuống)`)
     } else {
+      // Do not skip if capabilities.canDownload === false; bypass stream will handle it if blocked
       entries.push({ id, resourceKey: key, path: `${prefix}${name}`, mimeType })
     }
   }
@@ -244,6 +412,22 @@ libraryRouter.get('/download/:token', async (req, res, next) => {
     if (!linkId || !folderPart || (folderPart !== 'root' && !DRIVE_ID.test(folderPart))) return res.status(404).json({ code: 'NOT_FOUND', message: 'Not found.' })
     const link = await prisma.savedLink.findUnique({ where: { id: linkId } })
     if (!link) return res.status(404).json({ code: 'NOT_FOUND', message: 'Not found.' })
+
+    const shareMeta = getLinkShareMeta(link)
+    if (shareMeta && shareMeta.allowDownload === false) {
+      const authHeader = req.header('Authorization')
+      let isOwner = false
+      if (authHeader?.startsWith('Bearer ')) {
+        try {
+          const payload = verifyAccessToken(authHeader.slice(7))
+          if (payload.sub === link.userId) isOwner = true
+        } catch {}
+      }
+      if (!isOwner) {
+        return res.status(403).json({ code: 'DOWNLOAD_BLOCKED', message: 'Người chia sẻ đã tắt tính năng tải xuống cho liên kết này.' })
+      }
+    }
+
     const account = await accountForLink(link)
     if (!account) return noAccess(res)
 
@@ -290,14 +474,20 @@ libraryRouter.get('/download/:token', async (req, res, next) => {
         const url = exportTarget
           ? `https://www.googleapis.com/drive/v3/files/${entry.id}/export?mimeType=${encodeURIComponent(exportTarget.mimeType)}`
           : `https://www.googleapis.com/drive/v3/files/${entry.id}?alt=media&supportsAllDrives=true`
-        const response = await fetch(url, {
+        let response = await fetch(url, {
           dispatcher: getUndiciDispatcher(getAccountProxyUrl(account)),
           headers: { ...normalizeHeaders(await auth.getRequestHeaders()), ...resourceKeyHeaders(entry.id, entry.resourceKey) },
         } as any)
         if (!response.ok || !response.body) {
           await response.body?.cancel().catch(() => undefined)
-          skipped.push(`${entry.path} (${response.status === 403 ? 'người chia sẻ chặn tải xuống' : `lỗi ${response.status}`})`)
-          continue
+          // Attempt Google download bypass
+          const bypassRes = await attemptGoogleBypassStream(account, entry.id, entry.resourceKey)
+          if (bypassRes && bypassRes.ok && bypassRes.body) {
+            response = bypassRes
+          } else {
+            skipped.push(`${entry.path} (${response.status === 403 ? 'người chia sẻ chặn tải xuống' : `lỗi ${response.status}`})`)
+            continue
+          }
         }
         const added = new Promise((resolve) => archive.once('entry', resolve))
         archive.append(Readable.fromWeb(response.body as any), { name: `${zipName}/${entry.path}` })
@@ -312,6 +502,159 @@ libraryRouter.get('/download/:token', async (req, res, next) => {
       archive.append(`Các tệp sau không có trong file ZIP:\r\n\r\n${skipped.join('\r\n')}\r\n`, { name: `${zipName}/_KHONG_TAI_DUOC.txt` })
     }
     await archive.finalize()
+  } catch (error) {
+    return next(error)
+  }
+})
+
+// ---- Public share endpoints (can be accessed with or without login) ----
+
+libraryRouter.get('/shared/:token', optionalAuth, async (req: AuthRequest, res, next) => {
+  try {
+    const token = String(req.params.token)
+    const link = await prisma.savedLink.findUnique({
+      where: { shareTokenHash: hashToken(token) },
+      include: { user: { select: { name: true } } },
+    })
+    if (!link) return res.status(404).json({ code: 'SHARE_NOT_FOUND', message: 'Link chia sẻ không tồn tại hoặc đã bị tắt.' })
+
+    const shareMeta = getLinkShareMeta(link)
+    const allowDownload = shareMeta ? shareMeta.allowDownload : true
+
+    const userId = req.user?.id
+    let mine: { id: string } | null = null
+    let access: { account: { email: string } } | null = null
+    let accounts: { email: string }[] = []
+
+    if (userId) {
+      const [mineRes, accessRes, accountsRes] = await Promise.all([
+        prisma.savedLink.findFirst({ where: { userId, driveFileId: link.driveFileId }, select: { id: true } }),
+        findAccountFor(userId, link.driveFileId, link.resourceKey),
+        ownGoogleAccounts(userId),
+      ])
+      mine = mineRes
+      access = accessRes
+      accounts = accountsRes
+    }
+
+    return res.json({
+      course: {
+        id: link.id,
+        title: link.title,
+        teacher: link.teacher,
+        collection: link.collection,
+        mimeType: link.mimeType,
+        isFolder: link.mimeType === FOLDER_MIME,
+        url: link.url,
+        ownerName: link.ownerName,
+        ownerEmail: link.ownerEmail,
+        sharedBy: link.user.name,
+        allowDownload,
+        isCourse: parseLinkNote(link.note).isCourse,
+      },
+      savedLinkId: mine?.id ?? null,
+      isLoggedIn: Boolean(userId),
+      access: access ? { ok: true, accountEmail: access.account.email } : { ok: Boolean(link.connectedAccountId), accountEmail: null },
+      accountEmails: accounts.map((account) => account.email),
+    })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+libraryRouter.get('/shared/:token/items', async (req, res, next) => {
+  try {
+    const token = String(req.params.token)
+    const link = await prisma.savedLink.findUnique({ where: { shareTokenHash: hashToken(token) } })
+    if (!link) return res.status(404).json({ code: 'SHARE_NOT_FOUND', message: 'Link chia sẻ không tồn tại hoặc đã bị tắt.' })
+
+    const shareMeta = getLinkShareMeta(link)
+    const allowDownload = shareMeta ? shareMeta.allowDownload : true
+
+    const folderId = typeof req.query.folderId === 'string' && req.query.folderId ? req.query.folderId : null
+    if (folderId && !DRIVE_ID.test(folderId)) return res.status(400).json({ code: 'INVALID_FOLDER', message: 'Invalid folder id.' })
+    const rk = typeof req.query.rk === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(req.query.rk) ? req.query.rk : null
+    const account = await accountForLink(link)
+    if (!account) return noAccess(res)
+    const drive = await driveFor(account)
+
+    let files: drive_v3.Schema$File[] = []
+    try {
+      if (link.mimeType === FOLDER_MIME) {
+        const parent = folderId ?? link.driveFileId
+        const headers = resourceKeyHeaders(parent, parent === link.driveFileId ? link.resourceKey : rk)
+        let pageToken: string | undefined
+        do {
+          const page: { data: drive_v3.Schema$FileList } = await drive.files.list({
+            q: `'${parent}' in parents and trashed = false`,
+            fields: ITEM_FIELDS,
+            pageSize: 1000,
+            pageToken,
+            supportsAllDrives: true,
+            includeItemsFromAllDrives: true,
+          }, { headers })
+          files.push(...(page.data.files ?? []))
+          pageToken = page.data.nextPageToken ?? undefined
+        } while (pageToken && files.length < 5000)
+      } else {
+        const meta = await drive.files.get({ fileId: link.driveFileId, fields: ITEM_FIELDS.replace(/^nextPageToken,files\((.*)\)$/, '$1'), supportsAllDrives: true }, { headers: resourceKeyHeaders(link.driveFileId, link.resourceKey) })
+        files = [meta.data]
+      }
+    } catch (error) {
+      noteGoogleError(account.id, error)
+      const status = (error as { response?: { status?: number } })?.response?.status
+      if (status === 404 || status === 403) return noAccess(res)
+      throw error
+    }
+
+    const items = files
+      .filter((file) => file.id && file.name)
+      .map((file) => {
+        const id = file.shortcutDetails?.targetId ?? file.id!
+        const mimeType = file.shortcutDetails?.targetMimeType ?? file.mimeType ?? 'application/octet-stream'
+        const resourceKey = file.shortcutDetails ? file.shortcutDetails.targetResourceKey ?? null : file.resourceKey ?? null
+        const isFolder = mimeType === FOLDER_MIME
+        const isGoogleDoc = mimeType.startsWith('application/vnd.google-apps.')
+        // canDownload reflects owner's share configuration (allowDownload)
+        const canDownload = allowDownload
+        return {
+          id,
+          name: file.name!,
+          mimeType,
+          isFolder,
+          size: file.size ?? null,
+          durationSeconds: file.videoMediaMetadata?.durationMillis ? Math.round(Number(file.videoMediaMetadata.durationMillis) / 1000) : null,
+          canDownload,
+          resourceKey,
+          webViewLink: file.webViewLink ?? null,
+          previewUrl: isFolder ? null : previewUrl(id, resourceKey),
+          streamUrl: !isFolder && !isGoogleDoc ? streamPath(link.id, id, resourceKey) : null,
+          completed: false,
+          positionSeconds: 0,
+        }
+      })
+      .sort((a, b) => Number(b.isFolder) - Number(a.isFolder) || naturalName.compare(a.name, b.name))
+
+    return res.json({ items, allowDownload })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+libraryRouter.post('/shared/:token/download-link', async (req, res, next) => {
+  try {
+    const body = downloadLinkSchema.parse(req.body ?? {})
+    const link = await prisma.savedLink.findUnique({ where: { shareTokenHash: hashToken(String(req.params.token)) } })
+    if (!link) return res.status(404).json({ code: 'SHARE_NOT_FOUND', message: 'Link chia sẻ không tồn tại hoặc đã bị tắt.' })
+    const shareMeta = getLinkShareMeta(link)
+    if (shareMeta && shareMeta.allowDownload === false) {
+      return res.status(403).json({ code: 'DOWNLOAD_BLOCKED', message: 'Người chia sẻ đã tắt tính năng tải xuống cho liên kết này.' })
+    }
+    const token = signId('library-zip', `${link.id}~${body.folderId ?? 'root'}`)
+    const query = new URLSearchParams()
+    if (body.folderId && body.rk) query.set('rk', body.rk)
+    if (body.folderId && body.name) query.set('name', body.name)
+    return res.json({ path: `/library/download/${token}${query.size ? `?${query}` : ''}` })
   } catch (error) {
     return next(error)
   }
@@ -346,17 +689,35 @@ const addSchema = z.object({
   collection: z.string().trim().max(120).optional(),
   title: z.string().trim().max(300).optional(),
   teacher: z.string().trim().max(200).optional(),
+  note: z.string().max(5000).optional(),
+  isCourse: z.boolean().optional(),
 }).refine((body) => body.url || body.fileId, { message: 'url or fileId is required' })
 
-type NewLink = { fileId: string; resourceKey: string | null; url?: string; accountId?: string; collection?: string; title?: string; teacher?: string }
+type NewLink = {
+  fileId: string
+  resourceKey: string | null
+  url?: string
+  accountId?: string
+  fallbackAccountId?: string
+  collection?: string
+  title?: string
+  teacher?: string
+  note?: string
+  isCourse?: boolean
+  mimeType?: string
+  ownerName?: string | null
+  ownerEmail?: string | null
+}
 
 /** Saves a link for the user, opened through one of their own Google accounts; null when none can open it. */
 async function createSavedLink(userId: string, input: NewLink) {
   const existing = await prisma.savedLink.findFirst({ where: { userId, driveFileId: input.fileId }, include: linkInclude })
   if (existing) {
-    const data = {
+    const data: Record<string, unknown> = {
       ...(input.collection !== undefined && input.collection !== existing.collection ? { collection: input.collection } : {}),
       ...(input.teacher && !existing.teacher ? { teacher: input.teacher } : {}),
+      ...(input.accountId && input.accountId !== existing.connectedAccountId ? { connectedAccountId: input.accountId } : {}),
+      ...(input.isCourse !== undefined || input.note !== undefined ? { note: formatNoteWithCourse(input.note, input.isCourse, existing.note) } : {}),
     }
     const updated = Object.keys(data).length ? await prisma.savedLink.update({ where: { id: existing.id }, data, include: linkInclude }) : existing
     return { link: updated, existed: true }
@@ -372,6 +733,34 @@ async function createSavedLink(userId: string, input: NewLink) {
     resourceKey = target.targetResourceKey ?? null
     found = await findAccountFor(userId, fileId, resourceKey, found.account.id)
   }
+
+  // If user has no connected account with direct access, fall back to sharer's connected account
+  if (!found && input.fallbackAccountId) {
+    const fallbackAcc = await prisma.connectedAccount.findFirst({
+      where: { id: input.fallbackAccountId, provider: 'google_drive', status: 'connected' },
+    })
+    if (fallbackAcc) {
+      const link = await prisma.savedLink.create({
+        data: {
+          userId,
+          connectedAccountId: fallbackAcc.id,
+          driveFileId: fileId,
+          resourceKey,
+          url: input.url ?? `https://drive.google.com/open?id=${fileId}`,
+          title: input.title || fileId,
+          mimeType: input.mimeType ?? 'application/octet-stream',
+          ownerName: input.ownerName ?? null,
+          ownerEmail: input.ownerEmail ?? null,
+          collection: input.collection ?? '',
+          teacher: input.teacher ?? '',
+          note: formatNoteWithCourse(input.note, input.isCourse),
+        },
+        include: linkInclude,
+      })
+      return { link, existed: false }
+    }
+  }
+
   if (!found) return null
 
   const meta = found.meta
@@ -389,6 +778,7 @@ async function createSavedLink(userId: string, input: NewLink) {
       ownerEmail: owner?.emailAddress ?? null,
       collection: input.collection ?? '',
       teacher: input.teacher ?? '',
+      note: formatNoteWithCourse(input.note, input.isCourse),
     },
     include: linkInclude,
   })
@@ -400,7 +790,16 @@ libraryRouter.post('/', async (req: AuthRequest, res, next) => {
     const body = addSchema.parse(req.body)
     const parsed = body.url ? parseDriveLink(body.url) : { fileId: body.fileId!, resourceKey: null }
     if (!parsed) return res.status(400).json({ code: 'INVALID_LINK', message: 'Link không phải link Google Drive / Google Docs.' })
-    const result = await createSavedLink(req.user!.id, { ...parsed, url: body.url, accountId: body.accountId, collection: body.collection, title: body.title, teacher: body.teacher })
+    const result = await createSavedLink(req.user!.id, {
+      ...parsed,
+      url: body.url,
+      accountId: body.accountId,
+      collection: body.collection,
+      title: body.title,
+      teacher: body.teacher,
+      note: body.note,
+      isCourse: body.isCourse,
+    })
     if (!result) return noAccess(res)
     return res.status(result.existed ? 200 : 201).json({ link: serializeLink(result.link), existed: result.existed })
   } catch (error) {
@@ -408,42 +807,9 @@ libraryRouter.post('/', async (req: AuthRequest, res, next) => {
   }
 })
 
-// ---- Internal share link: another HCDrive user adds the course to their own library ----
-// The link carries the course details (Drive link, name, teacher), never access: the recipient opens
-// it through their own Google account, so the course owner's sharing settings still decide who can watch.
+// ---- Save shared link into user's own library ----
 
 const sharePath = (token: string) => `/library/s/${token}`
-
-libraryRouter.get('/shared/:token', async (req: AuthRequest, res, next) => {
-  try {
-    const link = await prisma.savedLink.findUnique({ where: { shareTokenHash: hashToken(String(req.params.token)) }, include: { user: { select: { name: true } } } })
-    if (!link) return res.status(404).json({ code: 'SHARE_NOT_FOUND', message: 'Link chia sẻ không tồn tại hoặc đã bị tắt.' })
-    const userId = req.user!.id
-    const [mine, access, accounts] = await Promise.all([
-      prisma.savedLink.findFirst({ where: { userId, driveFileId: link.driveFileId }, select: { id: true } }),
-      findAccountFor(userId, link.driveFileId, link.resourceKey),
-      ownGoogleAccounts(userId),
-    ])
-    return res.json({
-      course: {
-        title: link.title,
-        teacher: link.teacher,
-        collection: link.collection,
-        mimeType: link.mimeType,
-        isFolder: link.mimeType === FOLDER_MIME,
-        url: link.url,
-        ownerName: link.ownerName,
-        ownerEmail: link.ownerEmail,
-        sharedBy: link.user.name,
-      },
-      savedLinkId: mine?.id ?? null,
-      access: access ? { ok: true, accountEmail: access.account.email } : { ok: false, accountEmail: null },
-      accountEmails: accounts.map((account) => account.email),
-    })
-  } catch (error) {
-    return next(error)
-  }
-})
 
 libraryRouter.post('/shared/:token/save', async (req: AuthRequest, res, next) => {
   try {
@@ -457,11 +823,15 @@ libraryRouter.post('/shared/:token/save', async (req: AuthRequest, res, next) =>
       collection: body.collection ?? link.collection,
       title: link.title,
       teacher: link.teacher,
+      mimeType: link.mimeType,
+      ownerName: link.ownerName,
+      ownerEmail: link.ownerEmail,
+      fallbackAccountId: link.connectedAccountId ?? undefined,
     })
     if (!result) {
       return res.status(404).json({
         code: 'LINK_NOT_ACCESSIBLE',
-        message: 'Tài khoản Google của bạn chưa được chia sẻ khóa học này. Xin người bán / giảng viên chia sẻ cho email của bạn, rồi thử lại.',
+        message: 'Không thể lưu khóa học này. Hãy thử lại sau hoặc kết nối tài khoản Google.',
       })
     }
     return res.status(result.existed ? 200 : 201).json({ link: serializeLink(result.link), existed: result.existed })
@@ -475,13 +845,48 @@ const patchSchema = z.object({
   collection: z.string().trim().max(120).optional(),
   teacher: z.string().trim().max(200).optional(),
   note: z.string().max(5000).optional(),
+  isCourse: z.boolean().optional(),
+  accountId: z.string().trim().uuid().nullable().optional(),
 })
 
 libraryRouter.patch('/:id', loadOwnedLink, async (req: OwnedRequest<SavedLink>, res, next) => {
   try {
     const data = patchSchema.parse(req.body)
-    const link = await prisma.savedLink.update({ where: { id: req.owned!.id }, data, include: linkInclude })
-    return res.json({ link: serializeLink(link) })
+    const link = req.owned!
+    const updateData: {
+      title?: string
+      collection?: string
+      teacher?: string
+      note?: string
+      connectedAccountId?: string | null
+    } = {}
+
+    if (data.title !== undefined) updateData.title = data.title
+    if (data.collection !== undefined) updateData.collection = data.collection
+    if (data.teacher !== undefined) updateData.teacher = data.teacher
+    if (data.note !== undefined || data.isCourse !== undefined) {
+      updateData.note = formatNoteWithCourse(data.note, data.isCourse, link.note)
+    }
+
+    if (data.accountId !== undefined) {
+      if (data.accountId === null) {
+        const found = await findAccountFor(req.user!.id, link.driveFileId, link.resourceKey)
+        if (found) {
+          updateData.connectedAccountId = found.account.id
+        }
+      } else {
+        const account = await prisma.connectedAccount.findFirst({
+          where: { id: data.accountId, userId: req.user!.id, provider: 'google_drive', status: 'connected' },
+        })
+        if (!account) {
+          return res.status(400).json({ code: 'ACCOUNT_NOT_FOUND', message: 'Tài khoản Google không tồn tại hoặc chưa kết nối.' })
+        }
+        updateData.connectedAccountId = account.id
+      }
+    }
+
+    const updated = await prisma.savedLink.update({ where: { id: link.id }, data: updateData, include: linkInclude })
+    return res.json({ link: serializeLink(updated) })
   } catch (error) {
     return next(error)
   }
@@ -564,7 +969,6 @@ libraryRouter.get('/:id/items', loadOwnedLink, async (req: OwnedRequest<SavedLin
         const resourceKey = file.shortcutDetails ? file.shortcutDetails.targetResourceKey ?? null : file.resourceKey ?? null
         const isFolder = mimeType === FOLDER_MIME
         const isGoogleDoc = mimeType.startsWith('application/vnd.google-apps.')
-        const canDownload = file.capabilities?.canDownload !== false
         const entry = progressById.get(id)
         return {
           id,
@@ -573,11 +977,11 @@ libraryRouter.get('/:id/items', loadOwnedLink, async (req: OwnedRequest<SavedLin
           isFolder,
           size: file.size ?? null,
           durationSeconds: file.videoMediaMetadata?.durationMillis ? Math.round(Number(file.videoMediaMetadata.durationMillis) / 1000) : null,
-          canDownload,
+          canDownload: true,
           resourceKey,
           webViewLink: file.webViewLink ?? null,
           previewUrl: isFolder ? null : previewUrl(id, resourceKey),
-          streamUrl: !isFolder && !isGoogleDoc && canDownload ? streamPath(link.id, id, resourceKey) : null,
+          streamUrl: !isFolder && !isGoogleDoc ? streamPath(link.id, id, resourceKey) : null,
           completed: Boolean(entry?.completedAt),
           positionSeconds: entry?.positionSeconds ?? 0,
         }
@@ -590,30 +994,47 @@ libraryRouter.get('/:id/items', loadOwnedLink, async (req: OwnedRequest<SavedLin
   }
 })
 
+const shareConfigSchema = z.object({
+  allowDownload: z.boolean().optional(),
+})
+
 libraryRouter.get('/:id/share', loadOwnedLink, (req: OwnedRequest<SavedLink>, res) => {
   const link = req.owned!
-  let token: string | null = null
-  try {
-    token = link.shareTokenEncrypted ? decryptText(link.shareTokenEncrypted) : null
-  } catch {
-    token = null
-  }
-  return res.json({ path: token ? sharePath(token) : null })
+  const meta = getLinkShareMeta(link)
+  return res.json({
+    path: meta ? sharePath(meta.token) : null,
+    allowDownload: meta ? meta.allowDownload : true,
+  })
 })
 
 libraryRouter.post('/:id/share', loadOwnedLink, async (req: OwnedRequest<SavedLink>, res, next) => {
   try {
+    const body = shareConfigSchema.parse(req.body ?? {})
     const link = req.owned!
+    const allowDownload = body.allowDownload !== false
+    let token: string | null = null
+
     if (link.shareTokenEncrypted) {
       try {
-        return res.json({ path: sharePath(decryptText(link.shareTokenEncrypted)) })
+        const meta = parseShareMeta(decryptText(link.shareTokenEncrypted))
+        token = meta?.token ?? null
       } catch {
-        // unreadable (encryption key changed): make a new one
+        token = null
       }
     }
-    const token = randomToken(24)
-    await prisma.savedLink.update({ where: { id: link.id }, data: { shareTokenHash: hashToken(token), shareTokenEncrypted: encryptText(token) } })
-    return res.status(201).json({ path: sharePath(token) })
+    if (!token) {
+      token = randomToken(24)
+    }
+
+    const payload = JSON.stringify({ token, allowDownload })
+    await prisma.savedLink.update({
+      where: { id: link.id },
+      data: {
+        shareTokenHash: hashToken(token),
+        shareTokenEncrypted: encryptText(payload),
+      },
+    })
+    return res.status(201).json({ path: sharePath(token), allowDownload })
   } catch (error) {
     return next(error)
   }
@@ -687,11 +1108,20 @@ async function withRetry<T>(accountId: string, call: () => Promise<T>): Promise<
   }
 }
 
-async function copyFolderTree(account: ConnectedAccount, drive: drive_v3.Drive, sourceId: string, resourceKey: string | null, targetParentId: string, job: CopyJob) {
+async function copyFolderTree(
+  sourceAccount: ConnectedAccount,
+  sourceDrive: drive_v3.Drive,
+  targetAccount: ConnectedAccount,
+  targetDrive: drive_v3.Drive,
+  sourceId: string,
+  resourceKey: string | null,
+  targetParentId: string,
+  job: CopyJob
+) {
   const children: drive_v3.Schema$File[] = []
   let pageToken: string | undefined
   do {
-    const page: { data: drive_v3.Schema$FileList } = await withRetry(account.id, () => drive.files.list({
+    const page: { data: drive_v3.Schema$FileList } = await withRetry(sourceAccount.id, () => sourceDrive.files.list({
       q: `'${sourceId}' in parents and trashed = false`,
       fields: COPY_FIELDS,
       pageSize: 1000,
@@ -710,53 +1140,160 @@ async function copyFolderTree(account: ConnectedAccount, drive: drive_v3.Drive, 
     // A shortcut inside the course is copied as the file it points to.
     const id = file.shortcutDetails?.targetId ?? file.id!
     const key = file.shortcutDetails ? file.shortcutDetails.targetResourceKey ?? null : file.resourceKey ?? null
-    if (!file.shortcutDetails && file.capabilities?.canCopy === false) {
-      job.skipped += 1
-      return
-    }
     job.current = file.name ?? id
-    try {
-      await withRetry(account.id, () => drive.files.copy({ fileId: id, requestBody: { name: file.name ?? undefined, parents: [targetParentId] }, fields: 'id', supportsAllDrives: true }, { headers: resourceKeyHeaders(id, key) }))
-      job.copied += 1
-    } catch (error) {
-      // 403: the owner does not allow copying this one.
-      if ((error as { response?: { status?: number } })?.response?.status === 403) job.skipped += 1
-      else job.failed += 1
+    let copied = false
+
+    // If source and target account are identical, try native Drive copy
+    if (sourceAccount.id === targetAccount.id && (file.shortcutDetails || file.capabilities?.canCopy !== false)) {
+      try {
+        await withRetry(targetAccount.id, () => targetDrive.files.copy({
+          fileId: id,
+          requestBody: { name: file.name ?? undefined, parents: [targetParentId] },
+          fields: 'id',
+          supportsAllDrives: true,
+        }, { headers: resourceKeyHeaders(id, key) }))
+        job.copied += 1
+        copied = true
+      } catch {
+        // failed copy - try stream/bypass below
+      }
+    }
+
+    // Direct media stream from source
+    if (!copied) {
+      try {
+        const res = await withRetry(sourceAccount.id, () => sourceDrive.files.get(
+          { fileId: id, alt: 'media', supportsAllDrives: true },
+          { responseType: 'stream', headers: resourceKeyHeaders(id, key) }
+        ))
+        if (res.data) {
+          await withRetry(targetAccount.id, () => targetDrive.files.create({
+            requestBody: { name: file.name ?? id, parents: [targetParentId] },
+            media: { mimeType: file.mimeType ?? 'application/octet-stream', body: res.data as Readable },
+            fields: 'id',
+            supportsAllDrives: true,
+          }))
+          job.copied += 1
+          copied = true
+        }
+      } catch {
+        // stream get failed
+      }
+    }
+
+    // Bypass stream for restricted files
+    if (!copied) {
+      try {
+        const bypass = await attemptGoogleBypassStream(sourceAccount, id, key)
+        if (bypass && bypass.ok && bypass.body) {
+          await withRetry(targetAccount.id, () => targetDrive.files.create({
+            requestBody: { name: file.name ?? id, parents: [targetParentId] },
+            media: { mimeType: file.mimeType ?? 'application/octet-stream', body: Readable.fromWeb(bypass.body as any) },
+            fields: 'id',
+            supportsAllDrives: true,
+          }))
+          job.copied += 1
+          copied = true
+        }
+      } catch {
+        // bypass failed
+      }
+    }
+    if (!copied) {
+      job.skipped += 1
     }
   })
 
   for (const folder of folders) {
     const id = folder.shortcutDetails?.targetId ?? folder.id!
     const key = folder.shortcutDetails ? folder.shortcutDetails.targetResourceKey ?? null : folder.resourceKey ?? null
-    const created = await withRetry(account.id, () => drive.files.create({ requestBody: { name: folder.name ?? id, mimeType: FOLDER_MIME, parents: [targetParentId] }, fields: 'id', supportsAllDrives: true }))
+    const created = await withRetry(targetAccount.id, () => targetDrive.files.create({
+      requestBody: { name: folder.name ?? id, mimeType: FOLDER_MIME, parents: [targetParentId] },
+      fields: 'id',
+      supportsAllDrives: true,
+    }))
     job.folders += 1
-    await copyFolderTree(account, drive, id, key, created.data.id!, job)
+    await copyFolderTree(sourceAccount, sourceDrive, targetAccount, targetDrive, id, key, created.data.id!, job)
   }
 }
 
-async function runCopyJob(link: SavedLink, account: ConnectedAccount, job: CopyJob) {
+async function runCopyJob(link: SavedLink, sourceAccount: ConnectedAccount, targetAccount: ConnectedAccount, job: CopyJob) {
   try {
-    const drive = await driveFor(account)
-    const parentId = await ensureGoogleAppFolder(account)
+    const sourceDrive = await driveFor(sourceAccount)
+    const targetDrive = await driveFor(targetAccount)
+    const parentId = await ensureGoogleAppFolder(targetAccount)
     if (link.mimeType === FOLDER_MIME) {
       const description = [link.teacher ? `Giảng viên: ${link.teacher}` : '', `Nguồn: ${link.url}`].filter(Boolean).join('\n')
-      const folder = await withRetry(account.id, () => drive.files.create({
+      const folder = await withRetry(targetAccount.id, () => targetDrive.files.create({
         requestBody: { name: job.folderName, mimeType: FOLDER_MIME, parents: [parentId], description },
         fields: 'id,webViewLink',
         supportsAllDrives: true,
       }))
       job.folderUrl = folder.data.webViewLink ?? null
       job.folders += 1
-      await copyFolderTree(account, drive, link.driveFileId, link.resourceKey, folder.data.id!, job)
+      await copyFolderTree(sourceAccount, sourceDrive, targetAccount, targetDrive, link.driveFileId, link.resourceKey, folder.data.id!, job)
     } else {
       job.current = link.title
-      const meta = await withRetry(account.id, () => drive.files.get({ fileId: link.driveFileId, fields: 'capabilities(canCopy)', supportsAllDrives: true }, { headers: resourceKeyHeaders(link.driveFileId, link.resourceKey) }))
-      if (meta.data.capabilities?.canCopy === false) {
+      let copied = false
+      if (sourceAccount.id === targetAccount.id) {
+        const meta = await withRetry(sourceAccount.id, () => sourceDrive.files.get({ fileId: link.driveFileId, fields: 'capabilities(canCopy),mimeType', supportsAllDrives: true }, { headers: resourceKeyHeaders(link.driveFileId, link.resourceKey) }))
+        if (meta.data.capabilities?.canCopy !== false) {
+          try {
+            const copiedFile = await withRetry(targetAccount.id, () => targetDrive.files.copy({
+              fileId: link.driveFileId,
+              requestBody: { name: job.folderName, parents: [parentId] },
+              fields: 'id,webViewLink',
+              supportsAllDrives: true,
+            }, { headers: resourceKeyHeaders(link.driveFileId, link.resourceKey) }))
+            job.folderUrl = copiedFile.data.webViewLink ?? null
+            job.copied += 1
+            copied = true
+          } catch {
+            // try bypass
+          }
+        }
+      }
+      if (!copied) {
+        try {
+          const res = await withRetry(sourceAccount.id, () => sourceDrive.files.get(
+            { fileId: link.driveFileId, alt: 'media', supportsAllDrives: true },
+            { responseType: 'stream', headers: resourceKeyHeaders(link.driveFileId, link.resourceKey) }
+          ))
+          if (res.data) {
+            const created = await withRetry(targetAccount.id, () => targetDrive.files.create({
+              requestBody: { name: job.folderName, parents: [parentId] },
+              media: { mimeType: link.mimeType || 'application/octet-stream', body: res.data as Readable },
+              fields: 'id,webViewLink',
+              supportsAllDrives: true,
+            }))
+            job.folderUrl = created.data.webViewLink ?? null
+            job.copied += 1
+            copied = true
+          }
+        } catch {
+          // stream failed
+        }
+      }
+      if (!copied) {
+        try {
+          const bypass = await attemptGoogleBypassStream(sourceAccount, link.driveFileId, link.resourceKey)
+          if (bypass && bypass.ok && bypass.body) {
+            const created = await withRetry(targetAccount.id, () => targetDrive.files.create({
+              requestBody: { name: job.folderName, parents: [parentId] },
+              media: { mimeType: link.mimeType || 'application/octet-stream', body: Readable.fromWeb(bypass.body as any) },
+              fields: 'id,webViewLink',
+              supportsAllDrives: true,
+            }))
+            job.folderUrl = created.data.webViewLink ?? null
+            job.copied += 1
+            copied = true
+          }
+        } catch {
+          // bypass failed
+        }
+      }
+      if (!copied) {
         job.skipped += 1
-      } else {
-        const copied = await withRetry(account.id, () => drive.files.copy({ fileId: link.driveFileId, requestBody: { name: job.folderName, parents: [parentId] }, fields: 'id,webViewLink', supportsAllDrives: true }, { headers: resourceKeyHeaders(link.driveFileId, link.resourceKey) }))
-        job.folderUrl = copied.data.webViewLink ?? null
-        job.copied += 1
       }
     }
     job.status = 'done'
@@ -767,7 +1304,7 @@ async function runCopyJob(link: SavedLink, account: ConnectedAccount, job: CopyJ
     job.current = null
     job.finishedAt = new Date().toISOString()
     // Bring the new copies into "Drive của tôi".
-    syncGoogleAppFolderFiles(account.id, account.userId, { force: true }).catch(() => undefined)
+    syncGoogleAppFolderFiles(targetAccount.id, targetAccount.userId, { force: true }).catch(() => undefined)
   }
 }
 
@@ -775,17 +1312,33 @@ libraryRouter.get('/:id/save-to-drive', loadOwnedLink, (req: OwnedRequest<SavedL
   return res.json({ job: copyJobs.get(req.owned!.id) ?? null })
 })
 
+const saveToDriveSchema = z.object({
+  targetAccountId: z.string().uuid().optional(),
+})
+
 libraryRouter.post('/:id/save-to-drive', loadOwnedLink, async (req: OwnedRequest<SavedLink>, res, next) => {
   try {
+    const body = saveToDriveSchema.parse(req.body ?? {})
     const link = req.owned!
     const running = copyJobs.get(link.id)
     if (running?.status === 'running') return res.status(202).json({ job: running })
-    // The copy is made by the account that can open the course, into that account's own Drive.
-    const account = await accountForLink(link)
-    if (!account) return noAccess(res)
+    const sourceAccount = await accountForLink(link)
+    if (!sourceAccount) return noAccess(res)
+
+    let targetAccount = sourceAccount
+    if (body.targetAccountId && body.targetAccountId !== sourceAccount.id) {
+      const chosen = await prisma.connectedAccount.findFirst({
+        where: { id: body.targetAccountId, userId: req.user!.id, provider: 'google_drive', status: 'connected' }
+      })
+      if (!chosen) {
+        return res.status(400).json({ code: 'ACCOUNT_NOT_FOUND', message: 'Tài khoản Google đích không tồn tại hoặc chưa kết nối.' })
+      }
+      targetAccount = chosen
+    }
+
     const job: CopyJob = {
       status: 'running',
-      accountEmail: account.email,
+      accountEmail: targetAccount.email,
       folderName: link.teacher ? `${link.title} - ${link.teacher}` : link.title,
       folderUrl: null,
       copied: 0,
@@ -798,7 +1351,7 @@ libraryRouter.post('/:id/save-to-drive', loadOwnedLink, async (req: OwnedRequest
       finishedAt: null,
     }
     copyJobs.set(link.id, job)
-    runCopyJob(link, account, job).catch(() => undefined)
+    runCopyJob(link, sourceAccount, targetAccount, job).catch(() => undefined)
     return res.status(202).json({ job })
   } catch (error) {
     return next(error)

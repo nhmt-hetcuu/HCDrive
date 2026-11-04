@@ -247,11 +247,11 @@ Library (links others shared with the user, e.g. bought courses):
 - `POST /library/collections/rename`
 - `GET /library/:id/items?folderId=<id>`
 - `PUT /library/:id/progress`
-- `GET|POST|DELETE /library/:id/share` (internal share link `/library/s/<token>`; recipients open the course with their own Google access)
-- `GET /library/shared/:token`, `POST /library/shared/:token/save`
-- `POST /library/:id/download-link` → signed `GET /library/download/:token` (course or chapter as a ZIP; files the owner blocks from download are listed in `_KHONG_TAI_DUOC.txt`)
-- `GET|POST /library/:id/save-to-drive` (background copy of the course into the user's Drive; real copies, files the owner blocks from copying are skipped)
-- `GET /library/stream/:token` (signed, no auth header; only for files the owner allows downloading)
+- `GET|POST|DELETE /library/:id/share` (internal/public share link `/library/s/<token>`; supports `allowDownload` toggle)
+- `GET /library/shared/:token`, `GET /library/shared/:token/items`, `POST /library/shared/:token/download-link`, `POST /library/shared/:token/save`
+- `POST /library/:id/download-link` → signed `GET /library/download/:token` (course or chapter as a ZIP; automatically bypasses Google Drive download blocks)
+- `GET|POST /library/:id/save-to-drive` (background copy of the course into the user's Drive; real copies, bypasses copy-restricted files via stream copy)
+- `GET /library/stream/:token` (signed, no auth header; automatically bypasses Google Drive download blocks; honors sharer's `allowDownload` toggle)
 
 Public shared files:
 - `GET /public/files/:token`

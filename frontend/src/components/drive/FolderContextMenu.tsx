@@ -33,6 +33,7 @@ type Props = {
   onCopyLink: () => void
   onDelete?: () => void
   onChangeColor?: (color: string) => void
+  onCopyToDrive?: () => void
 }
 
 function MenuItem({
@@ -94,6 +95,7 @@ export function FolderContextMenu({
   onCopyLink,
   onDelete,
   onChangeColor,
+  onCopyToDrive,
 }: Props) {
   const { t, lang } = useLanguage()
   const vi = lang === 'vi'
@@ -137,6 +139,13 @@ export function FolderContextMenu({
             label={t('action.cut', 'Di chuyển / Cắt')}
             onClick={onCut}
             kbd="⌘X"
+          />
+        )}
+        {onCopyToDrive && (
+          <MenuItem
+            icon={Copy}
+            label={vi ? 'Sao chép sang Drive khác…' : 'Copy to another Drive…'}
+            onClick={onCopyToDrive}
           />
         )}
 

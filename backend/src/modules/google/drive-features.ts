@@ -107,9 +107,9 @@ async function exportFormatsFor(account: ConnectedAccount, mimeType: string) {
   return exportFormatsCache[mimeType] ?? []
 }
 
-const fileFields = 'id,name,mimeType,size,modifiedTime,parents,starred,shortcutDetails(targetId)'
+export const fileFields = 'id,name,mimeType,size,modifiedTime,parents,starred,shortcutDetails(targetId)'
 
-async function recordDriveFile(userId: string, account: ConnectedAccount, folderId: string | null, item: { id?: string | null; name?: string | null; mimeType?: string | null; size?: string | null; modifiedTime?: string | null; shortcutDetails?: { targetId?: string | null } | null }) {
+export async function recordDriveFile(userId: string, account: ConnectedAccount, folderId: string | null, item: { id?: string | null; name?: string | null; mimeType?: string | null; size?: string | null; modifiedTime?: string | null; shortcutDetails?: { targetId?: string | null } | null }) {
   if (!item.id) throw shareError(502, 'GOOGLE_NO_ID', 'Google Drive did not return the new file.')
   const data = {
     userId,
@@ -129,7 +129,7 @@ async function recordDriveFile(userId: string, account: ConnectedAccount, folder
   return known ? prisma.file.update({ where: { id: known.id }, data }) : prisma.file.create({ data })
 }
 
-function serializeFile(file: File) {
+export function serializeFile(file: File) {
   return { ...file, sizeBytes: file.sizeBytes.toString(), thumbnailUrl: thumbnailUrlFor(file) }
 }
 

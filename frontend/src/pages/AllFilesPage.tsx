@@ -8,6 +8,7 @@ import { EmptyAreaContextMenu } from '@/components/drive/EmptyAreaContextMenu'
 import { FileContextMenu } from '@/components/drive/FileContextMenu'
 import { ShareDialog, type ShareTarget } from '@/components/drive/ShareDialog'
 import { FolderContextMenu } from '@/components/drive/FolderContextMenu'
+import { CopyToDriveModal, type CopyToDriveItem } from '@/components/drive/CopyToDriveModal'
 import { defaultFolderColor, defaultFolderIconUrl, folderColorOptions, folderIconOptions, normalizeFolderColor } from '@/components/drive/FolderVisual'
 import { DriveToolbar, type SortField, type SortDirection } from '@/components/drive/DriveToolbar'
 import { FilterChips, type FilterParams } from '@/components/drive/FilterChips'
@@ -176,6 +177,8 @@ export function AllFilesPage() {
   const [connectedAccounts, setConnectedAccounts] = useState<ConnectedAccount[]>([])
   const [selectedTargetAccountId, setSelectedTargetAccountId] = useState('')
   const [selectedFolderForDetails, setSelectedFolderForDetails] = useState<FolderItem | null>(null)
+  const [copyToDriveOpen, setCopyToDriveOpen] = useState(false)
+  const [copyToDriveItem, setCopyToDriveItem] = useState<CopyToDriveItem | null>(null)
   const lastSelectedFileIdRef = useRef<string | null>(null)
 
   // View mode state (grid vs list)
@@ -1336,7 +1339,34 @@ export function AllFilesPage() {
           setEmptyContextMenu({ x: 0, y: 0, open: false })
         }}
       />
-      <FileContextMenu x={contextMenu.x} y={contextMenu.y} file={contextMenu.file} onClose={() => setContextMenu({ x: 0, y: 0, file: null })} onView={() => viewFile()} onDownload={() => downloadFile()} onRename={() => { setRenameValue(activeFile?.name ?? ''); setRenameOpen(true); setContextMenu({ x: 0, y: 0, file: null }) }} onMove={() => { setMoveOpen(true); setContextMenu({ x: 0, y: 0, file: null }) }} onDetails={() => { setDetailOpen(true); setContextMenu({ x: 0, y: 0, file: null }) }} onShare={() => shareFile()} onCopyLink={copyShareLinkDirect} onInvite={inviteToFile} onDelete={() => { setDeleteOpen(true); setContextMenu({ x: 0, y: 0, file: null }) }} onStar={() => toggleStar()} />
+      <FileContextMenu
+        x={contextMenu.x}
+        y={contextMenu.y}
+        file={contextMenu.file}
+        onClose={() => setContextMenu({ x: 0, y: 0, file: null })}
+        onView={() => viewFile()}
+        onDownload={() => downloadFile()}
+        onRename={() => { setRenameValue(activeFile?.name ?? ''); setRenameOpen(true); setContextMenu({ x: 0, y: 0, file: null }) }}
+        onMove={() => { setMoveOpen(true); setContextMenu({ x: 0, y: 0, file: null }) }}
+        onDetails={() => { setDetailOpen(true); setContextMenu({ x: 0, y: 0, file: null }) }}
+        onShare={() => shareFile()}
+        onCopyLink={copyShareLinkDirect}
+        onInvite={inviteToFile}
+        onDelete={() => { setDeleteOpen(true); setContextMenu({ x: 0, y: 0, file: null }) }}
+        onStar={() => toggleStar()}
+        onCopyToDrive={() => {
+          if (contextMenu.file?.id) {
+            setCopyToDriveItem({
+              type: 'file',
+              id: contextMenu.file.id,
+              name: contextMenu.file.name,
+              currentAccountId: contextMenu.file.accountId,
+            })
+            setCopyToDriveOpen(true)
+            setContextMenu({ x: 0, y: 0, file: null })
+          }
+        }}
+      />
       <FolderContextMenu
         x={folderContextMenu.x}
         y={folderContextMenu.y}
@@ -1369,6 +1399,26 @@ export function AllFilesPage() {
             quickChangeFolderColor(activeFolderForMenu, color)
           }
         }}
+        onCopyToDrive={() => {
+          if (folderContextMenu.folder?.id) {
+            setCopyToDriveItem({
+              type: 'folder',
+              id: folderContextMenu.folder.id,
+              name: folderContextMenu.folder.name,
+              currentAccountId: folderContextMenu.folder.accounts?.[0]?.id,
+            })
+            setCopyToDriveOpen(true)
+            setFolderContextMenu({ x: 0, y: 0, folder: null })
+          }
+        }}
+      />
+
+      <CopyToDriveModal
+        open={copyToDriveOpen}
+        onClose={() => setCopyToDriveOpen(false)}
+        item={copyToDriveItem}
+        connectedAccounts={connectedAccounts}
+        onSuccess={reloadAfterFolderChange}
       />
 
       <DummyModal open={uploadOpen} title={lang === 'vi' ? 'Tải tệp lên' : 'Upload File'} description={lang === 'vi' ? 'Tệp được truyền thẳng lên tài khoản lưu trữ.' : 'Files stream straight to the storage account.'} onClose={() => setUploadOpen(false)}>

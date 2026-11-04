@@ -1,10 +1,27 @@
 import { useEffect, useState } from 'react'
-import { CheckCircle2, Copy, ExternalLink, HardDriveDownload, Link2, Loader2 } from 'lucide-react'
-import { API_URL, apiFetch } from '@/lib/api'
+import {
+  Calendar,
+  Check,
+  CheckCircle2,
+  Clock,
+  Copy,
+  ExternalLink,
+  Folder,
+  GraduationCap,
+  HardDriveDownload,
+  Info,
+  Link2,
+  Loader2,
+  Mail,
+  UserCheck,
+  UserRound,
+} from 'lucide-react'
+import { API_URL, apiFetch, formatDriveDate } from '@/lib/api'
 import { copyText } from '@/lib/clipboard'
 import { useSnackbar } from '@/context/SnackbarContext'
 import { DummyModal } from '@/components/drive/DummyModal'
 import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
 // Dialogs of the Courses page (pages/LibraryPage.tsx): the internal share link, and copying a course
 // into the user's own Drive.
@@ -25,6 +42,18 @@ export async function startCourseDownload(linkId: string, chapter?: { folderId?:
   anchor.remove()
 }
 
+/** Downloads a shared course without requiring account ownership of the saved link. */
+export async function startSharedCourseDownload(token: string, chapter?: { folderId?: string; rk?: string; name?: string }) {
+  const data = await apiFetch<{ path: string }>(`/library/shared/${encodeURIComponent(token)}/download-link`, { method: 'POST', body: JSON.stringify(chapter ?? {}) })
+  const anchor = document.createElement('a')
+  anchor.href = `${API_URL}${data.path}`
+  anchor.rel = 'noopener'
+  anchor.download = ''
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+}
+
 /** One lesson as a file: the signed stream URL, asked to download instead of play. */
 export function lessonDownloadUrl(streamUrl: string, name: string) {
   return `${API_URL}${streamUrl}${streamUrl.includes('?') ? '&' : '?'}download=${encodeURIComponent(name)}`
@@ -39,27 +68,52 @@ function errorText(error: unknown, fallback: string) {
 export function ShareCourseModal({ link, vi, onClose, onChanged }: { link: CourseRef | null; vi: boolean; onClose: () => void; onChanged: (id: string, shared: boolean) => void }) {
   const { showSnackbar } = useSnackbar()
   const [path, setPath] = useState<string | null>(null)
+  const [allowDownload, setAllowDownload] = useState(true)
   const [busy, setBusy] = useState(false)
   const url = path ? `${window.location.origin}${path}` : ''
 
   useEffect(() => {
     setPath(null)
+    setAllowDownload(true)
     if (!link?.shared) return
-    apiFetch<{ path: string | null }>(`/library/${link.id}/share`).then((data) => setPath(data.path)).catch(() => undefined)
+    apiFetch<{ path: string | null; allowDownload?: boolean }>(`/library/${link.id}/share`)
+      .then((data) => {
+        setPath(data.path)
+        setAllowDownload(data.allowDownload !== false)
+      })
+      .catch(() => undefined)
   }, [link?.id, link?.shared])
 
-  async function create() {
+  async function create(downloadSetting = allowDownload) {
     if (!link) return
     setBusy(true)
     try {
-      const data = await apiFetch<{ path: string }>(`/library/${link.id}/share`, { method: 'POST' })
+      const data = await apiFetch<{ path: string; allowDownload?: boolean }>(`/library/${link.id}/share`, {
+        method: 'POST',
+        body: JSON.stringify({ allowDownload: downloadSetting }),
+      })
       setPath(data.path)
+      setAllowDownload(data.allowDownload !== false)
       onChanged(link.id, true)
       await copyText(`${window.location.origin}${data.path}`).then(() => showSnackbar(vi ? 'Đã tạo và sao chép link' : 'Link created and copied')).catch(() => undefined)
     } catch (error) {
       showSnackbar(errorText(error, vi ? 'Không tạo được link' : 'Could not create the link'))
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function toggleDownload(newVal: boolean) {
+    setAllowDownload(newVal)
+    if (!path || !link) return
+    try {
+      await apiFetch(`/library/${link.id}/share`, {
+        method: 'POST',
+        body: JSON.stringify({ allowDownload: newVal }),
+      })
+      showSnackbar(newVal ? (vi ? 'Đã bật cho phép tải xuống' : 'Download allowed') : (vi ? 'Đã chặn tải bài học (chỉ xem online)' : 'Download blocked (watch online only)'))
+    } catch (error) {
+      showSnackbar(errorText(error, vi ? 'Không cập nhật được tuỳ chọn tải' : 'Could not update download setting'))
     }
   }
 
@@ -79,30 +133,59 @@ export function ShareCourseModal({ link, vi, onClose, onChanged }: { link: Cours
   }
 
   return (
-    <DummyModal open={Boolean(link)} onClose={onClose} title={vi ? `Chia sẻ "${link?.title ?? ''}"` : `Share "${link?.title ?? ''}"`} description={vi ? 'Link HCDrive cho người dùng trong hệ thống HCDrive này.' : 'An HCDrive link for users of this HCDrive.'}>
-      <div className="space-y-3 text-sm">
-        <p className="text-xs text-slate-600 dark:text-slate-300">
+    <DummyModal open={Boolean(link)} onClose={onClose} title={vi ? `Chia sẻ "${link?.title ?? ''}"` : `Share "${link?.title ?? ''}"`} description={vi ? 'Link chia sẻ nội bộ HCDrive cho mọi người xem, tải và lưu khóa học.' : 'Share course link for watching, downloading and saving.'}>
+      <div className="space-y-4 text-sm">
+        <p className="text-xs leading-relaxed text-slate-600 dark:text-slate-300">
           {vi
-            ? 'Người nhận đăng nhập HCDrive, mở link và thêm khóa học (tên, giảng viên, nhóm) vào mục Khóa học của họ. Họ xem bằng tài khoản Google của chính họ, nên người bán / giảng viên vẫn phải chia sẻ khóa cho email của họ. Ghi chú riêng của bạn không được gửi kèm.'
-            : 'Recipients sign in to HCDrive, open the link and add the course (name, teacher, group) to their own Courses. They watch with their own Google account, so the course owner still has to share it with their email. Your private note is not included.'}
+            ? 'Người nhận mở link chia sẻ có thể xem trực tuyến toàn bộ bài học, video và tài liệu mà không cần đăng nhập hoặc đăng nhập tùy ý. Người xem cũng có thể tải từng bài học hoặc tải ZIP toàn khóa (nếu bạn cho phép), và lưu khóa học vào tài khoản HCDrive của họ.'
+            : 'Viewers opening this link can watch all lessons, videos and documents online with or without logging in. Viewers can also download individual lessons or full ZIP (if permitted) and save to their HCDrive library.'}
         </p>
+
+        {/* Allow download toggle switch */}
+        <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-3.5 dark:border-slate-800 dark:bg-[#1e1f20]">
+          <label className="flex items-start justify-between gap-3 cursor-pointer select-none">
+            <div className="min-w-0 flex-1">
+              <span className="text-xs font-medium text-slate-800 dark:text-slate-100">
+                {vi ? 'Cho phép người xem tải bài học & tải ZIP' : 'Allow viewers to download lessons & ZIP'}
+              </span>
+              <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+                {allowDownload
+                  ? (vi ? 'Người xem có thể tải từng bài học hoặc tải ZIP toàn bộ khóa.' : 'Viewers can download individual lessons or full course ZIP.')
+                  : (vi ? 'Chặn tải: Người xem chỉ có thể xem trực tuyến trong trình phát, các nút tải sẽ bị tắt.' : 'Blocked: Viewers can only stream online in the player; download buttons are disabled.')}
+              </p>
+            </div>
+            <input
+              type="checkbox"
+              checked={allowDownload}
+              onChange={(e) => toggleDownload(e.target.checked)}
+              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-[#0b57d0] focus:ring-[#0b57d0] dark:border-slate-700 cursor-pointer"
+            />
+          </label>
+        </div>
+
         {path ? (
-          <div className="flex gap-2">
-            <input readOnly value={url} onFocus={(event) => event.currentTarget.select()} className="min-w-0 flex-1 rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-700 dark:border-slate-700 dark:bg-[#131314] dark:text-slate-200" />
-            <Button size="sm" variant="tonal" onClick={() => copyText(url).then(() => showSnackbar(vi ? 'Đã sao chép link' : 'Link copied')).catch(() => showSnackbar(vi ? 'Không sao chép được' : 'Could not copy'))}>
-              <Copy className="mr-1.5 h-4 w-4" />{vi ? 'Sao chép' : 'Copy'}
-            </Button>
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-slate-600 dark:text-slate-300">
+              {vi ? 'Liên kết chia sẻ' : 'Shareable link'}
+            </label>
+            <div className="flex gap-2">
+              <input readOnly value={url} onFocus={(event) => event.currentTarget.select()} className="min-w-0 flex-1 rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-700 dark:border-slate-700 dark:bg-[#131314] dark:text-slate-200" />
+              <Button size="sm" variant="tonal" onClick={() => copyText(url).then(() => showSnackbar(vi ? 'Đã sao chép link' : 'Link copied')).catch(() => showSnackbar(vi ? 'Không sao chép được' : 'Could not copy'))}>
+                <Copy className="mr-1.5 h-4 w-4" />{vi ? 'Sao chép' : 'Copy'}
+              </Button>
+            </div>
           </div>
         ) : null}
-        <div className="flex justify-end gap-2">
+
+        <div className="flex justify-end gap-2 pt-1">
           {path ? <Button size="sm" variant="danger" onClick={revoke} disabled={busy}>{vi ? 'Tắt link' : 'Turn off link'}</Button> : null}
           {!path ? (
-            <Button size="sm" onClick={create} disabled={busy || !link}>
+            <Button size="sm" onClick={() => create(allowDownload)} disabled={busy || !link}>
               {busy ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Link2 className="mr-1.5 h-4 w-4" />}
               {vi ? 'Tạo link chia sẻ' : 'Create share link'}
             </Button>
           ) : (
-            <Button size="sm" variant="text" onClick={onClose}>{vi ? 'Xong' : 'Done'}</Button>
+            <Button size="sm" variant="text" onClick={onClose}>{vi ? 'Đóng' : 'Close'}</Button>
           )}
         </div>
       </div>
@@ -123,11 +206,46 @@ type CopyJob = {
   error: string | null
 }
 
-export function SaveToDriveModal({ link, vi, onClose }: { link: CourseRef | null; vi: boolean; onClose: () => void }) {
+export function SaveToDriveModal({
+  link,
+  accounts,
+  vi,
+  onClose,
+}: {
+  link: (CourseRef & { account?: { id: string; email: string } | null; isCourse?: boolean }) | null
+  accounts?: Array<{ id: string; email: string }>
+  vi: boolean
+  onClose: () => void
+}) {
   const { showSnackbar } = useSnackbar()
   const [job, setJob] = useState<CopyJob | null>(null)
   const [starting, setStarting] = useState(false)
+  const [availableAccounts, setAvailableAccounts] = useState<Array<{ id: string; email: string }>>(accounts ?? [])
+  const [targetAccountId, setTargetAccountId] = useState('')
   const linkId = link?.id
+
+  // Fetch accounts if not provided
+  useEffect(() => {
+    if (accounts && accounts.length > 0) {
+      setAvailableAccounts(accounts)
+      return
+    }
+    apiFetch<{ accounts: Array<{ id: string; email: string; provider?: string }> }>('/connected-accounts')
+      .then((data) => {
+        const gAccounts = (data.accounts || []).filter((a) => !a.provider || a.provider === 'google_drive')
+        setAvailableAccounts(gAccounts)
+      })
+      .catch(() => undefined)
+  }, [accounts])
+
+  // Set initial target account
+  useEffect(() => {
+    if (link?.account?.id) {
+      setTargetAccountId(link.account.id)
+    } else if (availableAccounts.length > 0 && !targetAccountId) {
+      setTargetAccountId(availableAccounts[0].id)
+    }
+  }, [link, availableAccounts, targetAccountId])
 
   // Shows a copy that is already running (or finished) for this course.
   useEffect(() => {
@@ -153,7 +271,10 @@ export function SaveToDriveModal({ link, vi, onClose }: { link: CourseRef | null
     if (!linkId) return
     setStarting(true)
     try {
-      const data = await apiFetch<{ job: CopyJob }>(`/library/${linkId}/save-to-drive`, { method: 'POST' })
+      const data = await apiFetch<{ job: CopyJob }>(`/library/${linkId}/save-to-drive`, {
+        method: 'POST',
+        body: JSON.stringify({ targetAccountId: targetAccountId || undefined }),
+      })
       setJob(data.job)
     } catch (error) {
       showSnackbar(errorText(error, vi ? 'Không bắt đầu được' : 'Could not start'))
@@ -163,20 +284,60 @@ export function SaveToDriveModal({ link, vi, onClose }: { link: CourseRef | null
   }
 
   const name = link ? (link.teacher ? `${link.title} - ${link.teacher}` : link.title) : ''
+  const isCourseItem = link?.isCourse !== false
 
   return (
-    <DummyModal open={Boolean(link)} onClose={onClose} title={vi ? 'Lưu khóa học vào Drive' : 'Save the course to Drive'} description={vi ? 'Chép thật toàn bộ tệp vào Drive của bạn (không phải lối tắt), để vẫn còn khi người chia sẻ xoá hoặc thu hồi.' : 'Real copies of every file in your Drive (not shortcuts), kept even if the owner deletes or unshares them.'}>
-      <div className="space-y-3 text-sm">
+    <DummyModal
+      open={Boolean(link)}
+      onClose={onClose}
+      title={
+        vi
+          ? `Lưu ${isCourseItem ? 'khóa học' : 'thư mục'} vào Drive`
+          : `Save ${isCourseItem ? 'course' : 'folder'} to Drive`
+      }
+      description={
+        vi
+          ? 'Chép toàn bộ tệp vào Google Drive đích của bạn (tự động bypass nếu tệp bị hạn chế tải hoặc chặn sao chép).'
+          : 'Real copies of every file into your destination Google Drive (automatically bypasses copy-restricted files).'
+      }
+    >
+      <div className="space-y-3.5 text-sm">
         {!job ? (
           <>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                {vi ? 'Tài khoản Google Drive đích' : 'Destination Google Drive account'}
+              </label>
+              <select
+                value={targetAccountId}
+                onChange={(e) => setTargetAccountId(e.target.value)}
+                disabled={starting}
+                className="w-full h-10 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#282a2c] px-3 text-xs sm:text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                {availableAccounts.map((acc) => (
+                  <option key={acc.id} value={acc.id}>
+                    {acc.email} {link?.account?.id === acc.id ? (vi ? '(Đang mở liên kết này)' : '(Current opener)') : ''}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+                {vi
+                  ? 'Bạn có thể chọn bất kỳ tài khoản Google nào đã kết nối để lưu, không nhất thiết phải là mail dính quyền xem.'
+                  : 'You can choose any connected Google account to save, not necessarily the email with view rights.'}
+              </p>
+            </div>
+
             <p className="text-xs text-slate-600 dark:text-slate-300">
               {vi
-                ? `HCDrive tạo ${link?.isFolder ? 'thư mục' : 'tệp'} "${name}" ở thư mục gốc Drive của tài khoản Google đang mở khóa này, giữ nguyên các chương bên trong. Bản sao chiếm dung lượng của tài khoản đó. Tệp người bán chặn sao chép sẽ được bỏ qua.`
-                : `HCDrive creates ${link?.isFolder ? 'the folder' : 'the file'} "${name}" in the Drive root of the Google account that opens this course, keeping its chapters. The copies use that account's storage. Files the owner blocked from copying are skipped.`}
+                ? `HCDrive tạo ${link?.isFolder ? 'thư mục' : 'tệp'} "${name}" ở thư mục gốc Drive của tài khoản Google được chọn, giữ nguyên cấu trúc các mục bên trong. Bản sao chiếm dung lượng của tài khoản đích.`
+                : `HCDrive creates ${link?.isFolder ? 'the folder' : 'the file'} "${name}" in the root Drive of the chosen Google account, keeping its structure. The copies use that account's storage.`}
             </p>
-            <div className="flex justify-end gap-2">
-              <Button size="sm" variant="text" onClick={onClose}>{vi ? 'Huỷ' : 'Cancel'}</Button>
-              <Button size="sm" onClick={start} disabled={starting}>
+
+            <div className="flex justify-end gap-2 pt-1">
+              <Button size="sm" variant="text" onClick={onClose} disabled={starting}>
+                {vi ? 'Huỷ' : 'Cancel'}
+              </Button>
+              <Button size="sm" onClick={start} disabled={starting || !targetAccountId}>
                 {starting ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <HardDriveDownload className="mr-1.5 h-4 w-4" />}
                 {vi ? 'Bắt đầu lưu' : 'Start saving'}
               </Button>
@@ -194,7 +355,7 @@ export function SaveToDriveModal({ link, vi, onClose }: { link: CourseRef | null
                   ? `${job.copied} tệp, ${job.folders} thư mục → ${job.accountEmail}`
                   : `${job.copied} files, ${job.folders} folders → ${job.accountEmail}`}
               </p>
-              {job.skipped ? <p className="mt-1 text-amber-700 dark:text-amber-300">{vi ? `${job.skipped} tệp bị người bán chặn sao chép, đã bỏ qua.` : `${job.skipped} files the owner blocked from copying were skipped.`}</p> : null}
+              {job.skipped ? <p className="mt-1 text-amber-700 dark:text-amber-300">{vi ? `${job.skipped} tệp không thể sao chép, đã bỏ qua.` : `${job.skipped} files could not be copied, skipped.`}</p> : null}
               {job.failed ? <p className="mt-1 text-red-600 dark:text-red-400">{vi ? `${job.failed} tệp chép lỗi; bấm lưu lại để thử lần nữa.` : `${job.failed} files failed; save again to retry.`}</p> : null}
               {job.current ? <p className="mt-1 truncate text-slate-500">{job.current}</p> : null}
               {job.error ? <p className="mt-1 break-all text-red-600 dark:text-red-400">{job.error}</p> : null}
@@ -214,3 +375,271 @@ export function SaveToDriveModal({ link, vi, onClose }: { link: CourseRef | null
     </DummyModal>
   )
 }
+
+export type CourseDetailRef = {
+  id: string
+  driveFileId: string
+  title: string
+  url: string
+  mimeType: string
+  isFolder: boolean
+  ownerName: string | null
+  ownerEmail: string | null
+  collection: string
+  teacher: string
+  note: string
+  isCourse?: boolean
+  shared: boolean
+  lastOpenedAt: string | null
+  createdAt: string
+  account: { id: string; email: string } | null
+  completedCount: number
+}
+
+export function CourseDetailsModal({
+  link,
+  accounts,
+  vi,
+  onClose,
+  onAccountChanged,
+}: {
+  link: CourseDetailRef | null
+  accounts: Array<{ id: string; email: string }>
+  vi: boolean
+  onClose: () => void
+  onAccountChanged: (updated: CourseDetailRef) => void
+}) {
+  const { showSnackbar } = useSnackbar()
+  const [selectedAccountId, setSelectedAccountId] = useState('')
+  const [changing, setChanging] = useState(false)
+  const [copiedId, setCopiedId] = useState(false)
+
+  useEffect(() => {
+    if (link) {
+      setSelectedAccountId(link.account?.id ?? '')
+    }
+  }, [link])
+
+  if (!link) return null
+
+  async function handleSwitchAccount(newAccountId: string) {
+    if (!link) return
+    setSelectedAccountId(newAccountId)
+    setChanging(true)
+    try {
+      const data = await apiFetch<{ link: CourseDetailRef }>(`/library/${link.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ accountId: newAccountId || null }),
+      })
+      onAccountChanged(data.link)
+      showSnackbar(vi ? 'Đã đổi tài khoản Google Drive cho khóa học' : 'Changed Google Drive account for course')
+    } catch (err) {
+      showSnackbar(errorText(err, vi ? 'Không đổi được tài khoản' : 'Could not change account'))
+      setSelectedAccountId(link.account?.id ?? '')
+    } finally {
+      setChanging(false)
+    }
+  }
+
+  function handleCopyId() {
+    if (!link) return
+    copyText(link.driveFileId)
+      .then(() => {
+        setCopiedId(true)
+        setTimeout(() => setCopiedId(false), 2000)
+        showSnackbar(vi ? 'Đã sao chép ID tệp Drive' : 'Copied Drive file ID')
+      })
+      .catch(() => undefined)
+  }
+
+  const ownerText = link.ownerName && link.ownerEmail
+    ? `${link.ownerName} (${link.ownerEmail})`
+    : link.ownerEmail || link.ownerName || (vi ? 'Không có thông tin' : 'Unknown')
+
+    const isCourse = link.isCourse !== false
+
+    return (
+    <DummyModal
+      open={Boolean(link)}
+      onClose={onClose}
+      title={vi ? (isCourse ? 'Chi tiết khóa học' : 'Chi tiết liên kết chia sẻ') : (isCourse ? 'Course details' : 'Shared link details')}
+      description={vi ? (isCourse ? 'Thông tin quyền truy cập, tài khoản gắn và thông số khóa học.' : 'Thông tin quyền truy cập, tài khoản gắn và thông số tệp / thư mục.') : (isCourse ? 'Access permissions, connected account, and course metadata.' : 'Access permissions, connected account, and file / folder metadata.')}
+    >
+      <div className="space-y-4 text-xs">
+        {/* Title Header */}
+        <div className="flex items-start gap-3 rounded-xl border border-slate-200/80 bg-slate-50/70 p-3.5 dark:border-slate-800 dark:bg-[#1e1f20]">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#c2e7ff]/60 dark:bg-[#004a77]">
+            {isCourse ? (
+              <GraduationCap className="h-5 w-5 text-[#0b57d0] dark:text-[#a8c7fa]" />
+            ) : (
+              <Folder className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+            )}
+          </div>
+          <div className="min-w-0 flex-1">
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100 line-clamp-2">{link.title}</h3>
+            {link.teacher ? (
+              <p className="mt-0.5 flex items-center gap-1 text-slate-600 dark:text-slate-300">
+                <UserRound className="h-3 w-3 text-slate-400" />
+                {link.teacher}
+              </p>
+            ) : null}
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              {link.collection ? (
+                <span className="inline-block rounded bg-[#c2e7ff]/60 px-2 py-0.5 text-[10px] font-medium text-[#001d35] dark:bg-[#004a77] dark:text-[#c2e7ff]">
+                  {link.collection}
+                </span>
+              ) : null}
+              <span className={cn(
+                'inline-block rounded px-2 py-0.5 text-[10px] font-medium',
+                isCourse
+                  ? 'bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300'
+                  : 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
+              )}>
+                {vi ? (isCourse ? 'Khóa học' : 'Thư mục Drive') : (isCourse ? 'Course' : 'Drive folder')}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Account selection / attachment */}
+        <div className="rounded-xl border border-blue-200/80 bg-blue-50/50 p-3.5 dark:border-blue-900/50 dark:bg-blue-950/20">
+          <label className="block text-xs font-semibold text-blue-900 dark:text-blue-200">
+            <span className="flex items-center gap-1.5">
+              <Mail className="h-4 w-4 text-[#0b57d0] dark:text-[#a8c7fa]" />
+              {vi
+                ? (isCourse ? 'Tài khoản Drive đang gắn (dùng để mở khóa học)' : 'Tài khoản Drive đang gắn (dùng để mở thư mục)')
+                : (isCourse ? 'Attached Drive account (used to open course)' : 'Attached Drive account (used to open folder)')}
+            </span>
+            <div className="relative mt-2">
+              <select
+                disabled={changing || accounts.length === 0}
+                value={selectedAccountId}
+                onChange={(e) => handleSwitchAccount(e.target.value)}
+                className="w-full rounded-lg border border-blue-300 bg-white px-3 py-2 text-xs font-medium text-slate-800 outline-none focus:border-[#0b57d0] focus:ring-2 focus:ring-[#0b57d0]/20 dark:border-blue-800 dark:bg-[#131314] dark:text-slate-100 disabled:opacity-50"
+              >
+                <option value="">{vi ? 'Tự động (thử lần lượt các tài khoản)' : 'Auto (try all connected accounts)'}</option>
+                {accounts.map((acc) => (
+                  <option key={acc.id} value={acc.id}>
+                    {acc.email} {link.account?.id === acc.id ? (vi ? ' (đang dùng)' : ' (active)') : ''}
+                  </option>
+                ))}
+              </select>
+              {changing ? (
+                <div className="absolute right-3 top-2.5">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-[#0b57d0]" />
+                </div>
+              ) : null}
+            </div>
+          </label>
+          <p className="mt-1.5 text-[11px] text-blue-700 dark:text-blue-300">
+            {vi
+              ? 'Nếu một số bài học chỉ xem được bằng email nhất định, hãy chọn đúng tài khoản Google đó.'
+              : 'If some lessons can only be viewed by a specific email, pick that Google account.'}
+          </p>
+        </div>
+
+        {/* Sharer & metadata grid */}
+        <div className="divide-y divide-slate-100 rounded-xl border border-slate-200 dark:divide-slate-800 dark:border-slate-800">
+          {/* Sharer Email */}
+          <div className="flex items-center justify-between p-3">
+            <span className="flex items-center gap-2 text-slate-500 dark:text-slate-400">
+              <UserCheck className="h-3.5 w-3.5" />
+              {vi ? 'Người chia sẻ (Drive)' : 'Shared by (Drive owner)'}
+            </span>
+            <span className="font-medium text-slate-800 dark:text-slate-200 text-right truncate max-w-[200px]" title={ownerText}>
+              {ownerText}
+            </span>
+          </div>
+
+          {/* Drive File ID */}
+          <div className="flex items-center justify-between p-3">
+            <span className="flex items-center gap-2 text-slate-500 dark:text-slate-400">
+              <Info className="h-3.5 w-3.5" />
+              {vi ? 'ID trên Google Drive' : 'Google Drive ID'}
+            </span>
+            <div className="flex items-center gap-1.5">
+              <code className="font-mono text-[11px] text-slate-700 dark:text-slate-300 max-w-[140px] truncate" title={link.driveFileId}>
+                {link.driveFileId}
+              </code>
+              <button
+                type="button"
+                onClick={handleCopyId}
+                className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 cursor-pointer"
+                title={vi ? 'Sao chép ID' : 'Copy ID'}
+              >
+                {copiedId ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
+              </button>
+            </div>
+          </div>
+
+          {/* Original Drive Link */}
+          <div className="flex items-center justify-between p-3">
+            <span className="flex items-center gap-2 text-slate-500 dark:text-slate-400">
+              <Link2 className="h-3.5 w-3.5" />
+              {vi ? 'Link gốc Google Drive' : 'Original Drive link'}
+            </span>
+            <a
+              href={link.url}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 font-medium text-[#0b57d0] hover:underline dark:text-[#a8c7fa]"
+            >
+              <span className="max-w-[160px] truncate">{vi ? 'Mở trên Google Drive' : 'Open in Drive'}</span>
+              <ExternalLink className="h-3 w-3" />
+            </a>
+          </div>
+
+          {/* Completed Lessons */}
+          {isCourse ? (
+            <div className="flex items-center justify-between p-3">
+              <span className="flex items-center gap-2 text-slate-500 dark:text-slate-400">
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                {vi ? 'Tiến độ học' : 'Progress'}
+              </span>
+              <span className="font-medium text-slate-800 dark:text-slate-200">
+                {vi ? `Đã hoàn thành ${link.completedCount} bài` : `${link.completedCount} lessons completed`}
+              </span>
+            </div>
+          ) : null}
+
+          {/* Last opened */}
+          <div className="flex items-center justify-between p-3">
+            <span className="flex items-center gap-2 text-slate-500 dark:text-slate-400">
+              <Clock className="h-3.5 w-3.5" />
+              {vi ? 'Lần mở gần nhất' : 'Last opened'}
+            </span>
+            <span className="text-slate-600 dark:text-slate-300">
+              {link.lastOpenedAt ? formatDriveDate(link.lastOpenedAt, vi ? 'vi' : 'en') : (vi ? 'Chưa mở' : 'Never')}
+            </span>
+          </div>
+
+          {/* Created at */}
+          <div className="flex items-center justify-between p-3">
+            <span className="flex items-center gap-2 text-slate-500 dark:text-slate-400">
+              <Calendar className="h-3.5 w-3.5" />
+              {vi ? 'Ngày lưu vào thư viện' : 'Added to library'}
+            </span>
+            <span className="text-slate-600 dark:text-slate-300">
+              {formatDriveDate(link.createdAt, vi ? 'vi' : 'en')}
+            </span>
+          </div>
+        </div>
+
+        {/* Note if any */}
+        {link.note ? (
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-[#1a1b1d]">
+            <p className="font-semibold text-slate-700 dark:text-slate-300">{vi ? 'Ghi chú' : 'Note'}:</p>
+            <p className="mt-1 whitespace-pre-wrap text-slate-600 dark:text-slate-400">{link.note}</p>
+          </div>
+        ) : null}
+
+        <div className="flex justify-end pt-2">
+          <Button size="sm" variant="outline" onClick={onClose}>
+            {vi ? 'Đóng' : 'Close'}
+          </Button>
+        </div>
+      </div>
+    </DummyModal>
+  )
+}
+

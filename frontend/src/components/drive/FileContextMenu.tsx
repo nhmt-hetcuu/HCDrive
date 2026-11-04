@@ -42,6 +42,7 @@ type Props = {
   /** Label for the last, red item; defaults to "Move to trash". */
   deleteLabel?: string
   onStar?: () => void
+  onCopyToDrive?: () => void
 }
 
 function MenuItem({
@@ -102,6 +103,7 @@ export function FileContextMenu({
   onDelete,
   deleteLabel,
   onStar,
+  onCopyToDrive,
 }: Props) {
   const { t, lang } = useLanguage()
   const vi = lang === 'vi'
@@ -145,6 +147,13 @@ export function FileContextMenu({
         {googleFile && isGoogleDoc(file) && <MenuItem icon={FileDown} label={vi ? 'Tải xuống dưới dạng…' : 'Download as…'} onClick={drive('export')} />}
         {onRename && <MenuItem icon={Edit3} label={t('action.rename', 'Đổi tên')} onClick={onRename} kbd="F2" />}
         {googleFile && <MenuItem icon={Files} label={vi ? 'Tạo bản sao' : 'Make a copy'} onClick={drive('copy')} />}
+        {onCopyToDrive && (
+          <MenuItem
+            icon={Copy}
+            label={vi ? 'Sao chép sang Drive khác…' : 'Copy to another Drive…'}
+            onClick={onCopyToDrive}
+          />
+        )}
 
         <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
 

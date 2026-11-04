@@ -9,6 +9,7 @@ import { DriveListView } from '@/components/drive/DriveListView'
 import { DriveGridView } from '@/components/drive/DriveGridView'
 import { DetailsPanel } from '@/components/drive/DetailsPanel'
 import { FileContextMenu } from '@/components/drive/FileContextMenu'
+import { CopyToDriveModal, type CopyToDriveItem } from '@/components/drive/CopyToDriveModal'
 import { GoogleFilePreview } from '@/components/drive/GoogleFilePreview'
 import { ShareDialog, type ShareTarget } from '@/components/drive/ShareDialog'
 import { FilterChips, type FilterValues } from '@/components/drive/FilterChips'
@@ -37,6 +38,15 @@ export function StarredPage() {
   // Modals & Context Menus
   const [previewOpen, setPreviewOpen] = useState(false)
   const [shareTarget, setShareTarget] = useState<ShareTarget | null>(null)
+  const [connectedAccounts, setConnectedAccounts] = useState<any[]>([])
+  const [copyToDriveOpen, setCopyToDriveOpen] = useState(false)
+  const [copyToDriveItem, setCopyToDriveItem] = useState<CopyToDriveItem | null>(null)
+
+  useEffect(() => {
+    apiFetch<{ accounts: any[] }>('/connected-accounts')
+      .then((data) => setConnectedAccounts(data.accounts || []))
+      .catch(() => setConnectedAccounts([]))
+  }, [])
 
   const [contextMenu, setContextMenu] = useState<{
     x: number
@@ -79,7 +89,7 @@ export function StarredPage() {
   }, [])
 
   // Accounts for FilterChips
-  const connectedAccounts = useMemo(() => {
+  const filterAccounts = useMemo(() => {
     const map = new Map<string, { id: string; email: string }>()
     for (const f of files) {
       if (f.accountId && f.accountEmail && !map.has(f.accountId)) {
@@ -260,7 +270,7 @@ export function StarredPage() {
       <div className="px-4 sm:px-6 pt-2 pb-1">
         <FilterChips
           filters={filters}
-          accounts={connectedAccounts}
+          accounts={filterAccounts}
           onFilterChange={(next) => setFilters((prev) => ({ ...prev, ...next }))}
           onClearFilters={() => setFilters({})}
           lang={lang}
@@ -368,6 +378,26 @@ export function StarredPage() {
           setContextMenu({ x: 0, y: 0, file: null })
         }}
         onStar={handleToggleStar}
+        onCopyToDrive={() => {
+          if (contextMenu.file?.id) {
+            setCopyToDriveItem({
+              type: 'file',
+              id: contextMenu.file.id,
+              name: contextMenu.file.name,
+              currentAccountId: contextMenu.file.accountId,
+            })
+            setCopyToDriveOpen(true)
+            setContextMenu({ x: 0, y: 0, file: null })
+          }
+        }}
+      />
+
+      <CopyToDriveModal
+        open={copyToDriveOpen}
+        onClose={() => setCopyToDriveOpen(false)}
+        item={copyToDriveItem}
+        connectedAccounts={connectedAccounts}
+        onSuccess={loadStarred}
       />
 
       {/* 6. Google File Preview */}

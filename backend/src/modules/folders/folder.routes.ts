@@ -16,6 +16,7 @@ import { buildMergedFolders, ensureAccountFolderPath, loadVisibleFolders, moveDr
 import { refreshMergedFolderLive } from './live-refresh.js'
 import { mountDrivePermissionRoutes, shareError } from '../google/drive-sharing.js'
 import { searchKey } from '../../utils/search.js'
+import { copyFolderRecursively } from '../files/cross-account-copy.js'
 
 export const folderRouter = Router()
 folderRouter.use(requireAuth)
@@ -475,6 +476,34 @@ folderRouter.delete('/:id', async (req: AuthRequest, res, next) => {
 
     await createAuditLog(userId, 'DELETE_FOLDER', 'folder', roots[0].id, { name: roots[0].name, copies: roots.length })
     return res.json({ status: 'ok' })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+folderRouter.post('/:id/copy-to', async (req: AuthRequest, res, next) => {
+  try {
+    const folderId = String(req.params.id)
+    const body = z.object({
+      targetAccountId: z.string().min(1),
+      targetParentFolderId: z.string().nullable().optional(),
+      name: z.string().min(1).max(255).optional(),
+    }).parse(req.body)
+
+    const result = await copyFolderRecursively(
+      req.user!.id,
+      folderId,
+      body.targetAccountId,
+      body.targetParentFolderId,
+      body.name
+    )
+    await createAuditLog(req.user!.id, 'COPY_FOLDER_TO_ACCOUNT', 'folder', folderId, {
+      targetAccountId: body.targetAccountId,
+      targetParentFolderId: body.targetParentFolderId,
+      copiedFiles: result.copiedFiles,
+      copiedFolders: result.copiedFolders,
+    })
+    return res.status(201).json({ status: 'ok', ...result, folder: serializeFolder(result.folder) })
   } catch (error) {
     return next(error)
   }

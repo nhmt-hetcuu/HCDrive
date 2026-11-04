@@ -35,6 +35,7 @@ function App() {
             <Route path="google-connected" element={<GoogleConnectedPage />} />
             <Route path="public/files/:token" element={<PublicFilePage />} />
             <Route path="public/files/:token/embed" element={<PublicFilePage embed />} />
+            <Route path="library/s/:token" element={<SharedCoursePage />} />
             <Route path="api" element={<ApiDocsPage />} />
             <Route path="api-docs" element={<ApiDocsPage />} />
             <Route element={<ProtectedRoute />}>
@@ -47,7 +48,6 @@ function App() {
                 <Route path="quota" element={<Navigate to="/storage" replace />} />
                 <Route path="shared" element={<SharedPage />} />
                 <Route path="library" element={<LibraryPage />} />
-                <Route path="library/s/:token" element={<SharedCoursePage />} />
                 <Route path="recent" element={<RecentPage />} />
                 <Route path="starred" element={<StarredPage />} />
                 <Route path="archived" element={<Navigate to="/trash" replace />} />

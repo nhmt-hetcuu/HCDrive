@@ -24,7 +24,7 @@ import {
   ChevronDown,
   FileIcon,
   FolderIcon,
-  GraduationCap,
+  FolderSync,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { BrandLogo } from '@/components/drive/BrandLogo'
@@ -55,7 +55,7 @@ const driveMenu: MenuItem[] = [
   { key: 'menu.all_files', label: 'Drive của tôi', icon: HardDrive, href: '/all-files' },
   { key: 'menu.accounts', label: 'Tài khoản lưu trữ', icon: Layers, href: '/accounts' },
   { key: 'menu.shared_with_me', label: 'Được chia sẻ với tôi', icon: Share2, href: '/shared', dividerBefore: true },
-  { key: 'menu.library', label: 'Khóa học', icon: GraduationCap, href: '/library' },
+  { key: 'menu.library', label: 'Quản lý Share', icon: FolderSync, href: '/library' },
   { key: 'menu.recent', label: 'Gần đây', icon: Clock, href: '/recent' },
   { key: 'menu.starred', label: 'Có gắn dấu sao', icon: Star, href: '/starred' },
   { key: 'menu.trash', label: 'Thùng rác', icon: Trash2, href: '/trash', dividerBefore: true },

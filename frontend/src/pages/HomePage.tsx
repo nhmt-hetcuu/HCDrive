@@ -19,6 +19,7 @@ import { DriveToolbar } from '@/components/drive/DriveToolbar'
 import { DetailsPanel } from '@/components/drive/DetailsPanel'
 import { FileContextMenu } from '@/components/drive/FileContextMenu'
 import { FolderContextMenu } from '@/components/drive/FolderContextMenu'
+import { CopyToDriveModal, type CopyToDriveItem } from '@/components/drive/CopyToDriveModal'
 import { GoogleFilePreview } from '@/components/drive/GoogleFilePreview'
 import { ShareDialog, type ShareTarget } from '@/components/drive/ShareDialog'
 import { getFileVisual } from '@/components/drive/DriveGridView'
@@ -68,6 +69,16 @@ export function HomePage() {
     y: number
     folder: FolderItem | null
   }>({ x: 0, y: 0, folder: null })
+
+  const [connectedAccounts, setConnectedAccounts] = useState<any[]>([])
+  const [copyToDriveOpen, setCopyToDriveOpen] = useState(false)
+  const [copyToDriveItem, setCopyToDriveItem] = useState<CopyToDriveItem | null>(null)
+
+  useEffect(() => {
+    apiFetch<{ accounts: any[] }>('/connected-accounts')
+      .then((data) => setConnectedAccounts(data.accounts || []))
+      .catch(() => setConnectedAccounts([]))
+  }, [])
 
   async function loadSuggestions() {
     setLoading(true)
@@ -587,6 +598,18 @@ export function HomePage() {
           setFileContextMenu({ x: 0, y: 0, file: null })
         }}
         onStar={handleToggleStar}
+        onCopyToDrive={() => {
+          if (fileContextMenu.file?.id) {
+            setCopyToDriveItem({
+              type: 'file',
+              id: fileContextMenu.file.id,
+              name: fileContextMenu.file.name,
+              currentAccountId: fileContextMenu.file.accountId,
+            })
+            setCopyToDriveOpen(true)
+            setFileContextMenu({ x: 0, y: 0, file: null })
+          }
+        }}
       />
 
       <FolderContextMenu
@@ -619,6 +642,26 @@ export function HomePage() {
           }
           setFolderContextMenu({ x: 0, y: 0, folder: null })
         }}
+        onCopyToDrive={() => {
+          if (folderContextMenu.folder?.id) {
+            setCopyToDriveItem({
+              type: 'folder',
+              id: folderContextMenu.folder.id,
+              name: folderContextMenu.folder.name,
+              currentAccountId: folderContextMenu.folder.accounts?.[0]?.id,
+            })
+            setCopyToDriveOpen(true)
+            setFolderContextMenu({ x: 0, y: 0, folder: null })
+          }
+        }}
+      />
+
+      <CopyToDriveModal
+        open={copyToDriveOpen}
+        onClose={() => setCopyToDriveOpen(false)}
+        item={copyToDriveItem}
+        connectedAccounts={connectedAccounts}
+        onSuccess={loadSuggestions}
       />
 
       {/* 6. Google File Preview */}

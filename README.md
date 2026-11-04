@@ -20,6 +20,7 @@
 <p align="center">
   <a href="#bắt-đầu-nhanh">Bắt đầu nhanh</a> ·
   <a href="#tính-năng">Tính năng</a> ·
+  <a href="DOCS-GIAO-DIEN-DEMO.md">Demo Giao diện</a> ·
   <a href="#cấu-hình">Cấu hình</a> ·
   <a href="#kiến-trúc">Kiến trúc</a> ·
   <a href="#api">API</a> ·
@@ -54,8 +55,9 @@ Mỗi tài khoản Google miễn phí có 15 GB. Khi dùng nhiều tài khoản,
 ### Tệp và thư mục
 
 - Tải lên tệp và cả thư mục (giữ nguyên cây thư mục con), tải lên tiếp tục được khi mạng chập chờn.
+- **Sao chép sang Drive khác (Cross-Account Copy)**: Sao chép trực tiếp tệp hoặc cả thư mục từ tài khoản Google Drive này sang tài khoản Google Drive khác đã kết nối trong HCDrive qua menu ngữ cảnh chuột phải; truyền dữ liệu stream trực tiếp qua RAM (Zero Local Disk Buffering), không cần tải về máy tính rồi tải lên lại.
 - Tải xuống thư mục hoặc nhiều tệp thành một file ZIP, nén trực tiếp trong lúc truyền.
-- Chọn nhiều tệp (Shift / Ctrl + nhấp), thao tác hàng loạt: di chuyển, gắn dấu sao, xoá, khôi phục.
+- Chọn nhiều tệp (Shift / Ctrl + nhấp), thao tác hàng loạt: di chuyển, gắn dấu sao, xoá, khôi phục, tải ZIP.
 - Xem trước ảnh, video, âm thanh, PDF, văn bản và tệp Office ngay trong trình duyệt.
 - Tìm kiếm theo tên và theo nội dung tệp (full-text của Google Drive), lọc theo loại, tài khoản, ngày sửa, dung lượng.
 - Thùng rác, gắn dấu sao, tệp gần đây.
@@ -70,16 +72,17 @@ Tạo Google Docs / Sheets / Slides / Forms, xuất sang nhiều định dạng,
 - Chia sẻ trực tiếp với email qua quyền của Google Drive.
 - Mời người dùng khác trong HCDrive xem hoặc chỉnh sửa.
 
-### Khóa học
+### Quản lý Share (Khóa học & Thư mục chia sẻ)
 
-Mục **Khóa học** quản lý các link Google Drive người khác chia sẻ riêng cho email của bạn (khóa học đã mua, thư mục bài giảng, tài liệu):
+Mục **Quản lý Share** (trước đây là Khóa học) quản lý các link Google Drive người khác chia sẻ cho email của bạn (khóa học đã mua, thư mục bài giảng, tài liệu dự án) hoặc chia sẻ qua link nội bộ / công khai:
 
-- Xếp theo khóa, ghi tên giảng viên và ghi chú.
-- Danh sách bài theo đúng thứ tự số; video phát ngay trong HCDrive và nhớ vị trí đang xem; đánh dấu bài đã học.
-- Tải cả khóa hoặc từng chương thành ZIP, hoặc chép thật toàn bộ khóa vào Drive của bạn.
-- Link chia sẻ nội bộ để người dùng HCDrive khác thêm khóa vào thư viện của họ.
-
-HCDrive tôn trọng quyền mà người chia sẻ đặt ra: người xem dùng tài khoản Google của chính họ, tệp bị chặn tải xuống hoặc chặn sao chép sẽ không được tải hay chép.
+- **Hai chế độ hiển thị linh hoạt (Dual-Mode)**: Tùy chọn tick checkbox *"Đây là khóa học"*:
+  - *Nếu là khóa học*: Giao diện học tập tối ưu với trình phát đa phương tiện (Plyr player) liên tục, playlist danh sách bài, đánh dấu tích bài đã học, thanh phần trăm tiến độ và tự động chuyển bài tiếp theo.
+  - *Nếu không phải khóa học*: Giao diện trình duyệt thư mục Google Drive chuẩn mực với đường dẫn Breadcrumb nhiều cấp, chuyển đổi chế độ xem Lưới / Danh sách, popup modal xem trước trực tiếp tài liệu/video/ảnh, tải từng tệp hoặc nén tải ZIP cả thư mục.
+- **Lưu vào Drive đa tài khoản (Save to Drive)**: Người dùng có thể chọn bất kỳ tài khoản Google Drive nào đã kết nối trong HCDrive để lưu toàn bộ khóa học hoặc thư mục chia sẻ về Drive đó (không phụ thuộc vào email liên kết, truyền dữ liệu stream trực tiếp không tốn ổ cứng máy chủ).
+- **Xem thông tin chi tiết**: Xem nhanh email người chia sẻ, tài khoản Google Drive đang liên kết và cấu hình quyền tải xuống.
+- **Tự động bypass hạn chế tải xuống từ Google Drive**: Khi bài học hoặc tài liệu bị Google Drive chặn tải xuống hoặc chặn sao chép (`canDownload: false` / `canCopy: false`), HCDrive tự động kích hoạt cơ chế bypass trích xuất stream trực tiếp để người dùng vẫn xem và tải bài mượt mà.
+- **Kiểm soát quyền tải xuống khi chia sẻ**: Chủ liên kết có thể bật hoặc tắt quyền tải xuống (`allowDownload: true / false`) khi tạo link chia sẻ nội bộ/công khai (`/library/s/:token`) — cho phép người nhận chỉ xem trực tuyến hoặc được phép tải về tùy ý.
 
 ### Quản trị và bảo mật
 
@@ -271,16 +274,16 @@ HCDrive backend ── Express 5 · TypeScript
 
 ## API
 
-Tài liệu API đầy đủ có sẵn trong ứng dụng tại **`/api`**. Các route cần đăng nhập nhận header `Authorization: Bearer <accessToken>`.
+Tài liệu API tương tác đầy đủ có sẵn ngay trên giao diện ứng dụng tại **`/api-docs`** (hỗ trợ sao chép cURL, xem cấu trúc schema và mẫu request/response). Các route cần đăng nhập nhận header `Authorization: Bearer <accessToken>`.
 
 | Nhóm | Route chính |
 |---|---|
 | Xác thực | `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `GET /auth/me` |
 | Tài khoản lưu trữ | `GET /connected-accounts`, `POST /connected-accounts/s3`, `GET /storage/summary`, `PATCH /storage/routing-policy` |
-| Thư mục | `GET /folders`, `POST /folders`, `PATCH /folders/:id`, `GET /folders/:id/download` |
-| Tệp | `GET /files`, `GET /files/:id/download`, `PATCH /files/:id`, `POST /files/batch-download` |
+| Thư mục | `GET /folders`, `POST /folders`, `PATCH /folders/:id`, `GET /folders/:id/download`, `POST /folders/copy-to-drive` |
+| Tệp | `GET /files`, `GET /files/:id/download`, `PATCH /files/:id`, `POST /files/batch-download`, `POST /files/copy-to-drive` |
 | Tải lên | `POST /uploads`, `POST /uploads/resumable/init` |
-| Khóa học | `GET /library`, `POST /library`, `GET /library/:id/items` |
+| Quản lý Share | `GET /library`, `POST /library`, `GET /library/:id/items`, `GET /library/shared/:token`, `POST /library/shared/:token/save`, `POST /library/:id/save-to-drive` |
 | Tích hợp ngoài | `POST /api/v1/uploads` (khoá API có scope `files:upload`) |
 
 Ví dụ tải tệp lên bằng khoá API (tạo khoá trong **Cài đặt → Khoá API**):

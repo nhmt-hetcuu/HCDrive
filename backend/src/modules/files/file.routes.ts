@@ -21,6 +21,7 @@ import { searchKey } from '../../utils/search.js'
 import { mapLimit } from '../../utils/concurrency.js'
 import { ownedBy, requireOwned, type OwnedRequest } from '../../middleware/ownership.js'
 import { exportExtension, mountDriveFeatureRoutes, thumbnailUrlFor } from '../google/drive-features.js'
+import { copySingleFile } from './cross-account-copy.js'
 
 
 
@@ -844,6 +845,26 @@ fileRouter.patch('/:id', requireOwnedFile, async (req: OwnedRequest<File & { con
     const updated = await prisma.file.update({ where: { id: file.id }, data: { ...(body.name ? { name: body.name } : {}) }, include: { connectedAccount: { select: { id: true, email: true, provider: true } }, folder: { select: { id: true, name: true } } } })
     await createAuditLog(req.user!.id, 'UPDATE_FILE', 'file', updated.id, { name: updated.name, updates: body })
     return res.json({ file: { ...updated, sizeBytes: updated.sizeBytes.toString() } })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+fileRouter.post('/:id/copy-to', requireAuth, async (req: AuthRequest, res, next) => {
+  try {
+    const fileId = String(req.params.id)
+    const body = z.object({
+      targetAccountId: z.string().min(1),
+      targetFolderId: z.string().nullable().optional(),
+      name: z.string().min(1).max(255).optional(),
+    }).parse(req.body)
+
+    const copied = await copySingleFile(req.user!.id, fileId, body.targetAccountId, body.targetFolderId, body.name)
+    await createAuditLog(req.user!.id, 'COPY_FILE_TO_ACCOUNT', 'file', fileId, {
+      targetAccountId: body.targetAccountId,
+      targetFolderId: body.targetFolderId,
+    })
+    return res.status(201).json({ status: 'ok', file: copied })
   } catch (error) {
     return next(error)
   }

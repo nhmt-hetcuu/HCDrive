@@ -19,3 +19,19 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
     return res.status(401).json({ code: 'AUTH_INVALID_TOKEN', message: 'Invalid token.' })
   }
 }
+
+export async function optionalAuth(req: AuthRequest, _res: Response, next: NextFunction) {
+  try {
+    const header = req.header('Authorization')
+    if (!header?.startsWith('Bearer ')) return next()
+    const payload = verifyAccessToken(header.slice(7))
+    const session = await prisma.userSession.findUnique({ where: { id: payload.sid } })
+    if (session && !session.revokedAt && session.expiresAt >= new Date()) {
+      req.user = { id: payload.sub, sessionId: payload.sid }
+    }
+  } catch {
+    // ignore invalid token for optional auth
+  }
+  return next()
+}
+
