@@ -65,6 +65,10 @@ const vi: Translations = {
   'action.open_google_drive': 'Xem trên Google Drive',
   'action.open': 'Mở',
   'action.cut': 'Cắt / Di chuyển',
+  'action.copy_to_drive': 'Sao chép sang Drive khác…',
+  'action.make_copy': 'Tạo bản sao',
+  'action.download_as': 'Tải xuống dưới dạng…',
+  'action.add_shortcut': 'Thêm lối tắt vào Drive',
 
   // Table Headers
   'table.name': 'Tên tệp',
@@ -129,6 +133,13 @@ const vi: Translations = {
   'quota.account_files': 'Danh sách tệp trong tài khoản',
   'quota.auto_pooling': 'Tự động phân bổ / Gộp dung lượng (Mặc định)',
   'quota.no_account_files': 'Chưa có tệp nào được lưu trên tài khoản này.',
+
+  // Library / Share Management
+  'library.title': 'Quản lý Share',
+  'library.is_course': 'Đây là khóa học',
+  'library.is_course_desc': 'Hiển thị dạng trình phát video & bài học. Bỏ chọn để xem dạng thư mục Drive thông thường.',
+  'library.drive_folder': 'Thư mục Drive',
+  'library.course': 'Khóa học',
 
   // Upload status
   'upload.complete': 'Tải lên hoàn tất',
@@ -199,6 +210,10 @@ const en: Translations = {
   'action.open_google_drive': 'Open on Google Drive',
   'action.open': 'Open',
   'action.cut': 'Cut / Move',
+  'action.copy_to_drive': 'Copy to another Drive…',
+  'action.make_copy': 'Make a copy',
+  'action.download_as': 'Download as…',
+  'action.add_shortcut': 'Add shortcut to Drive',
 
   // Table Headers
   'table.name': 'Name',
@@ -263,6 +278,13 @@ const en: Translations = {
   'quota.account_files': 'Files in this account',
   'quota.auto_pooling': 'Automatic Pooling (Default)',
   'quota.no_account_files': 'No files stored in this account yet.',
+
+  // Library / Share Management
+  'library.title': 'Share Management',
+  'library.is_course': 'This is a course',
+  'library.is_course_desc': 'Display as video player and lessons. Uncheck to view as standard Drive folder.',
+  'library.drive_folder': 'Drive folder',
+  'library.course': 'Course',
 
   // Upload status
   'upload.complete': 'Upload complete',

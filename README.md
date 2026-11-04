@@ -18,6 +18,10 @@
 </p>
 
 <p align="center">
+  <b>Tiếng Việt</b> · <a href="README_EN.md">English</a>
+</p>
+
+<p align="center">
   <a href="#bắt-đầu-nhanh">Bắt đầu nhanh</a> ·
   <a href="#tính-năng">Tính năng</a> ·
   <a href="DOCS-GIAO-DIEN-DEMO.md">Demo Giao diện</a> ·
