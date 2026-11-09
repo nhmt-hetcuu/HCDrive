@@ -330,21 +330,52 @@ export function buildEndpoints(baseUrl: string): Endpoint[] {
 
     // =============================== UPLOADS ===============================
     {
-      id: 'upload-api', method: 'POST', path: '/api/v1/uploads', category: 'uploads', authRequired: true, authType: 'apiKey',
+      id: 'upload-api', method: 'POST', path: '/v1/uploads', category: 'uploads', authRequired: true, authType: 'apiKey',
       titleVi: 'Tải lên bằng khoá API', titleEn: 'Upload with an API key',
-      descVi: 'Dành cho script, CI, ứng dụng khác. Khoá cần scope files:upload (tạo ở Cài đặt → Khoá API). Cùng định dạng với POST /uploads: phần filesMeta (JSON) phải đứng trước các phần tệp. Tệp được stream thẳng tới tài khoản lưu trữ, không ghi đĩa.',
-      descEn: 'For scripts, CI and other apps. The key needs the files:upload scope. Same format as POST /uploads: the filesMeta part (JSON) must come before the file parts. Files stream straight to storage.',
+      descVi: 'Dành cho script, CI, ứng dụng khác. Hỗ trợ xác thực bằng Khoá API (9d_live_…) hoặc Bearer token. Có thể tải đơn giản chỉ với trường file=@ten_tep, hoặc tải nhiều tệp kèm filesMeta (JSON). Tệp được stream thẳng tới tài khoản lưu trữ, không ghi đĩa.',
+      descEn: 'For scripts, CI and external apps. Supports API keys (9d_live_…) or Bearer tokens. Simple upload with file=@your_file or batch upload with filesMeta (JSON). Files stream straight to storage.',
       params: [
-        p.header('Authorization', true, 'Bearer 9d_live_…', 'Bearer 9d_live_…'),
-        p.form('filesMeta', 'JSON array', true, 'Mảng [{ fieldName, fileName, mimeType, sizeBytes, folderId?, targetAccountId? }]', 'Array of { fieldName, fileName, mimeType, sizeBytes, folderId?, targetAccountId? }'),
-        p.form('{fieldName}', 'file', true, 'Nội dung tệp, tên phần trùng fieldName trong filesMeta', 'File content, part name matching fieldName'),
+        p.header('Authorization', true, 'Bearer 9d_live_… (hoặc X-API-Key: 9d_live_…)', 'Bearer 9d_live_… (or X-API-Key: 9d_live_…)'),
+        p.form('file', 'file', true, 'Tệp cần tải lên (cách đơn giản 1 tệp)', 'File to upload (simple single-file method)'),
+        p.form('folderId', 'string', false, 'Thư mục đích; trống = gốc', 'Target folder ID; empty = root'),
+        p.form('filesMeta', 'JSON array', false, 'Tuỳ chọn: Mảng [{ fieldName, fileName, mimeType, sizeBytes, folderId? }] khi tải nhiều tệp cùng lúc', 'Optional: Array for batch uploads'),
       ],
       bodyExample: undefined,
-      curlSnippet: `curl -X POST "${baseUrl}/api/v1/uploads" \\\n  -H "Authorization: Bearer 9d_live_your_api_key" \\\n  -F 'filesMeta=[{"fieldName":"file-0","fileName":"report.pdf","mimeType":"application/pdf","sizeBytes":"20480"}]' \\\n  -F "file-0=@report.pdf;type=application/pdf"`,
-      jsSnippet: `const form = new FormData();\nform.append('filesMeta', JSON.stringify([{\n  fieldName: 'file-0', fileName: file.name,\n  mimeType: file.type || 'application/octet-stream', sizeBytes: String(file.size),\n}]));\nform.append('file-0', file);\n\nconst res = await fetch('${baseUrl}/api/v1/uploads', {\n  method: 'POST',\n  headers: { 'Authorization': 'Bearer 9d_live_your_api_key' },\n  body: form,\n});\nconst data = await res.json();`,
-      pySnippet: `import json, os, requests\n\nmeta = [{"fieldName": "file-0", "fileName": "report.pdf",\n         "mimeType": "application/pdf", "sizeBytes": str(os.path.getsize("report.pdf"))}]\nfiles = [\n    ("filesMeta", (None, json.dumps(meta), "application/json")),\n    ("file-0", ("report.pdf", open("report.pdf", "rb"), "application/pdf")),\n]\nr = requests.post("${baseUrl}/api/v1/uploads",\n    headers={"Authorization": "Bearer 9d_live_your_api_key"}, files=files)\nprint(r.json())`,
+      curlSnippet: `# Cách 1: Tải nhanh 1 tệp đơn giản
+curl -X POST "${baseUrl}/v1/uploads" \\
+  -H "Authorization: Bearer 9d_live_your_api_key" \\
+  -F "file=@report.pdf"
+
+# Cách 2: Tải nhiều tệp kèm metadata JSON
+curl -X POST "${baseUrl}/v1/uploads" \\
+  -H "Authorization: Bearer 9d_live_your_api_key" \\
+  -F 'filesMeta=[{"fieldName":"file-0","fileName":"report.pdf","mimeType":"application/pdf","sizeBytes":"20480"}]' \\
+  -F "file-0=@report.pdf;type=application/pdf"`,
+      jsSnippet: `// Cách 1: Tải đơn giản với FormData
+const form = new FormData();
+form.append('file', file);
+if (folderId) form.append('folderId', folderId);
+
+const res = await fetch('${baseUrl}/v1/uploads', {
+  method: 'POST',
+  headers: { 'Authorization': 'Bearer 9d_live_your_api_key' },
+  body: form,
+});
+const data = await res.json();
+console.log(data);`,
+      pySnippet: `import requests
+
+# Cách 1: Tải nhanh 1 tệp
+with open("report.pdf", "rb") as f:
+    res = requests.post(
+        "${baseUrl}/v1/uploads",
+        headers={"Authorization": "Bearer 9d_live_your_api_key"},
+        files={"file": f},
+        data={"folderId": "optional_folder_id"} # tuỳ chọn
+    )
+print(res.json())`,
       successStatus: 201,
-      responseExample: json({ files: [fileExample], failed: [] }),
+      responseExample: json({ file: fileExample, files: [fileExample], failed: [] }),
       errorStatus: 400, errorExample: err('NO_ACCOUNT_WITH_ENOUGH_SPACE', 'No connected storage account has enough space.'),
     },
     {
@@ -353,7 +384,7 @@ export function buildEndpoints(baseUrl: string): Endpoint[] {
       descVi: 'Tải một hoặc nhiều tệp trong một request. Cách nhiều tệp: phần filesMeta rồi tới các tệp. Cách một tệp: các trường fileName, mimeType, sizeBytes, folderId? rồi phần tệp. Tài khoản lưu trữ được chọn theo chính sách phân bổ (hoặc targetAccountId).',
       descEn: 'One or many files per request. Many: a filesMeta part, then the files. One: fileName, mimeType, sizeBytes, folderId? fields, then the file. The storage account follows the routing policy (or targetAccountId).',
       params: [
-        p.form('filesMeta', 'JSON array', false, 'Như /api/v1/uploads (cách nhiều tệp)', 'As in /api/v1/uploads (batch form)'),
+        p.form('filesMeta', 'JSON array', false, 'Như /v1/uploads (cách nhiều tệp)', 'As in /v1/uploads (batch form)'),
         p.form('fileName / mimeType / sizeBytes', 'string', false, 'Cách một tệp', 'Single-file form'),
         p.form('folderId', 'string', false, 'Thư mục đích; trống = gốc', 'Target folder; empty = root'),
         p.form('targetAccountId', 'string', false, 'Ép lưu vào một tài khoản cụ thể', 'Force a specific storage account'),

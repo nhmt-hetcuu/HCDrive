@@ -4,4 +4,4 @@ import { handleUpload } from '../uploads/upload.routes.js'
 
 export const publicApiRouter = Router()
 
-publicApiRouter.post('/v1/uploads', requireApiKey('files:upload'), handleUpload)
+publicApiRouter.post(['/v1/uploads', '/api/v1/uploads'], requireApiKey('files:upload'), handleUpload)

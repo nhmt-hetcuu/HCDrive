@@ -1200,8 +1200,8 @@ function OverviewSection({ baseUrl, total }: { baseUrl: string; total: number })
 
         <div className="section-title"><span>Xác thực</span></div>
         <ul className="overview-list">
+          <li><b>Khoá API (API Key):</b> dạng <code>9d_live_…</code> (tạo ở Cài đặt → Khoá API). Sử dụng được cho cả <code>POST /v1/uploads</code> và các API tệp, thư mục, dung lượng qua header <code>Authorization: Bearer 9d_live_…</code> hoặc <code>X-API-Key: 9d_live_…</code> (không cần bước đăng nhập lấy access token).</li>
           <li><b>Access token (Bearer):</b> lấy từ <code>POST /auth/login</code>, gửi trong header <code>Authorization: Bearer &lt;accessToken&gt;</code>. Hết hạn thì đổi token mới bằng <code>POST /auth/refresh</code> với refresh token.</li>
-          <li><b>Khoá API:</b> dạng <code>9d_live_…</code>, tạo ở Cài đặt → Khoá API, chỉ dùng cho <code>POST /api/v1/uploads</code> (scope <code>files:upload</code>). Máy chủ chỉ lưu bản băm; khoá hiện một lần khi tạo.</li>
           <li><b>Admin:</b> route <code>/system/*</code> cần access token của quản trị viên (<code>ADMIN_EMAILS</code> hoặc người đăng ký đầu tiên).</li>
           <li><b>Public:</b> link chia sẻ, ảnh thu nhỏ và URL đã ký (<code>/library/stream/…</code>, <code>/library/download/…</code>) không cần header — chính token trên URL là quyền truy cập, và nó hết hạn sau vài giờ.</li>
         </ul>
@@ -1233,19 +1233,19 @@ function OverviewSection({ baseUrl, total }: { baseUrl: string; total: number })
       <div className="code-column">
         <div className="code-card">
           <div className="code-card-header"><div className="code-tabs"><span className="code-tab-btn active">Bắt đầu nhanh</span></div></div>
-          <pre className="code-card-body code-req">{`# 1. Đăng nhập
+          <pre className="code-card-body code-req">{`# Cách A: Dùng Khoá API (tạo ở Cài đặt → Khoá API)
+curl "${baseUrl}/files?q=report" \\
+  -H "Authorization: Bearer 9d_live_your_key"
+
+# Tải tệp lên đơn giản bằng Khoá API
+curl -X POST "${baseUrl}/v1/uploads" \\
+  -H "Authorization: Bearer 9d_live_your_key" \\
+  -F "file=@document.pdf"
+
+# Cách B: Đăng nhập JWT (dành cho Web/App)
 curl -X POST "${baseUrl}/auth/login" \\
   -H "Content-Type: application/json" \\
-  -d '{"email":"a@example.com","password":"..."}'
-
-# 2. Gọi API bằng access token
-curl "${baseUrl}/files?q=report" \\
-  -H "Authorization: Bearer <accessToken>"
-
-# 3. Hết hạn (401) → lấy token mới
-curl -X POST "${baseUrl}/auth/refresh" \\
-  -H "Content-Type: application/json" \\
-  -d '{"refreshToken":"<refreshToken>"}'`}</pre>
+  -d '{"email":"a@example.com","password":"..."}'`}</pre>
         </div>
         <div className="code-card">
           <div className="code-card-header"><div className="code-tabs"><span className="code-tab-btn active">Dạng lỗi</span></div></div>

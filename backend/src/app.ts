@@ -102,8 +102,14 @@ apiRouter.use('/audit-logs', auditLogRouter)
 apiRouter.use('/system', systemRouter)
 apiRouter.use('/home', homeRouter)
 apiRouter.use('/library', libraryRouter)
-// publicApiRouter defines /v1/uploads itself, so it is mounted without a prefix.
+// Developer API aliases & public API
+apiRouter.use('/upload', uploadRouter)
+apiRouter.use('/v1/files', fileRouter)
+apiRouter.use('/v1/folders', folderRouter)
+apiRouter.use('/v1/storage', storageRouter)
 apiRouter.use(publicApiRouter)
+// Gracefully handle duplicated /api/api/... paths from client libraries/cURLs
+apiRouter.use('/api', apiRouter)
 
 // Serve frontend static files if present (single-container all-in-one mode)
 const candidateDirs = [
