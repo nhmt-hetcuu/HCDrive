@@ -6,9 +6,10 @@ import type { AuthRequest } from './auth.middleware.js'
 const adminEmails = (env.ADMIN_EMAILS ?? '').split(',').map((email) => email.trim().toLowerCase()).filter(Boolean)
 
 export async function isAdminUser(userId: string) {
-  if (adminEmails.length > 0) {
-    const user = await prisma.user.findUnique({ where: { id: userId }, select: { email: true } })
-    return Boolean(user && adminEmails.includes(user.email.toLowerCase()))
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { email: true } })
+  if (!user) return false
+  if (adminEmails.length > 0 && adminEmails.includes(user.email.toLowerCase())) {
+    return true
   }
   const firstUser = await prisma.user.findFirst({ orderBy: { createdAt: 'asc' }, select: { id: true } })
   return firstUser?.id === userId

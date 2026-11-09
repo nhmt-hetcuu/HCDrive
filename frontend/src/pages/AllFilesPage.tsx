@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent, type MouseEvent } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useLocation, useSearchParams } from 'react-router-dom'
 import { ClipboardPaste, FolderPlus, Trash2, Upload, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -127,6 +127,7 @@ function FolderAppearanceFields({ color, iconUrl, onColorChange, onIconChange }:
 export function AllFilesPage() {
   const { t, lang } = useLanguage()
   const { showSnackbar } = useSnackbar()
+  const location = useLocation()
   const [searchParams, setSearchParams] = useSearchParams()
   const activeFolderId = searchParams.get('folderId')
   const searchQuery = searchParams.get('q')?.trim() ?? ''
@@ -397,8 +398,8 @@ export function AllFilesPage() {
     const p = new URLSearchParams(searchParams)
     p.delete('preview')
     p.sort()
-    return p.toString()
-  }, [searchParams])
+    return `${location.pathname}?${p.toString()}`
+  }, [location.pathname, searchParams])
 
   // datePreset is read too, so the date chip can show "Last 7 days" instead of a raw range.
   const currentFilters: FilterParams = useMemo(() => parseFilters(searchParams), [searchParams])
@@ -1035,14 +1036,18 @@ export function AllFilesPage() {
   }
 
   useEffect(() => {
-    function handleUploadCompleted() {
+    function handleReload() {
       reloadAfterFolderChangeRef.current().catch(() => undefined)
     }
-    window.addEventListener('hcdrive:upload-completed', handleUploadCompleted)
-    window.addEventListener('9drive:upload-completed', handleUploadCompleted)
+    window.addEventListener('hcdrive:upload-completed', handleReload)
+    window.addEventListener('9drive:upload-completed', handleReload)
+    window.addEventListener('hcdrive:refresh-files', handleReload)
+    window.addEventListener('9drive:refresh-files', handleReload)
     return () => {
-      window.removeEventListener('hcdrive:upload-completed', handleUploadCompleted)
-      window.removeEventListener('9drive:upload-completed', handleUploadCompleted)
+      window.removeEventListener('hcdrive:upload-completed', handleReload)
+      window.removeEventListener('9drive:upload-completed', handleReload)
+      window.removeEventListener('hcdrive:refresh-files', handleReload)
+      window.removeEventListener('9drive:refresh-files', handleReload)
     }
   }, [])
 

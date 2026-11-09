@@ -5,6 +5,7 @@ export type AuthUser = {
   avatarUrl?: string | null
   status?: string
   isAdmin?: boolean
+  hasPassword?: boolean
   /** Office uploads become Google Docs/Sheets/Slides (Settings → General). */
   convertUploads?: boolean
 }

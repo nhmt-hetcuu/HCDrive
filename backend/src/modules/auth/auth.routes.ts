@@ -29,7 +29,7 @@ function getAvatarsDir(): string {
 }
 
 const registerSchema = z.object({ name: z.string().min(2), email: z.string().email(), password: z.string().min(8), captchaToken: z.string().optional() })
-const loginSchema = z.object({ email: z.string().email(), password: z.string().min(1), captchaToken: z.string().max(4096).optional() })
+const loginSchema = z.object({ email: z.string().min(1), password: z.string().min(1), captchaToken: z.string().max(4096).optional() })
 const refreshSchema = z.object({ refreshToken: z.string().min(1) })
 const googleExchangeSchema = z.object({ token: z.string().min(1) })
 
@@ -85,7 +85,7 @@ authRouter.post('/register', limiters.register, async (req, res, next) => {
     if (existing) return res.status(409).json({ code: 'AUTH_EMAIL_TAKEN', message: 'Email already registered.' })
     const user = await prisma.user.create({ data: { name: body.name, email: body.email, passwordHash: await hashPassword(body.password) } })
     const tokens = await createSession(user.id, req)
-    return res.status(201).json({ ...tokens, user: { id: user.id, name: user.name, email: user.email } })
+    return res.status(201).json({ ...tokens, user: { id: user.id, name: user.name, email: user.email, hasPassword: true } })
   } catch (error) {
     return next(error)
   }
@@ -95,13 +95,21 @@ authRouter.post('/login', limiters.loginPerIp, limiters.loginPerAccount, async (
   try {
     const body = loginSchema.parse(req.body)
     if (!(await verifyCaptcha('login', body.captchaToken, clientIp(req)))) return res.status(400).json({ code: 'CAPTCHA_FAILED', message: 'Xác minh captcha không thành công. Thử lại.' })
-    const user = await prisma.user.findUnique({ where: { email: body.email } })
+    const loginInput = body.email.trim()
+    const user = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { email: loginInput.toLowerCase() },
+          { name: loginInput },
+        ],
+      },
+    })
     if (!user || !(await verifyPassword(user.passwordHash, body.password))) return res.status(401).json({ code: 'AUTH_INVALID_CREDENTIALS', message: 'Invalid email or password.' })
     if (user.status !== 'active') {
       return res.status(403).json({ code: 'ACCOUNT_DISABLED', message: 'Tài khoản của bạn đã bị vô hiệu hoá bởi quản trị viên.' })
     }
     const tokens = await createSession(user.id, req)
-    return res.json({ ...tokens, user: { id: user.id, name: user.name, email: user.email } })
+    return res.json({ ...tokens, user: { id: user.id, name: user.name, email: user.email, hasPassword: user.hasPassword } })
   } catch (error) {
     return next(error)
   }
@@ -392,7 +400,7 @@ authRouter.delete('/identities/:id', requireAuth, async (req: AuthRequest, res, 
 
 authRouter.get('/me', requireAuth, async (req: AuthRequest, res, next) => {
   try {
-    const user = await prisma.user.findUniqueOrThrow({ where: { id: req.user!.id }, select: { id: true, name: true, email: true, avatarUrl: true, status: true, convertUploads: true } })
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: req.user!.id }, select: { id: true, name: true, email: true, avatarUrl: true, status: true, hasPassword: true, convertUploads: true } })
     const isAdmin = await isAdminUser(user.id)
     return res.json({ user: { ...user, isAdmin } })
   } catch (error) {
@@ -402,6 +410,7 @@ authRouter.get('/me', requireAuth, async (req: AuthRequest, res, next) => {
 
 const updateProfileSchema = z.object({
   name: z.string().trim().min(1).max(100).optional(),
+  email: z.string().trim().email('Địa chỉ email không hợp lệ').toLowerCase().optional(),
   avatarUrl: z.string().trim().nullable().optional(),
   currentPassword: z.string().optional(),
   newPassword: z.string().min(6).optional(),
@@ -413,11 +422,41 @@ authRouter.patch('/me', requireAuth, limiters.passwordCheck, async (req: AuthReq
     const body = updateProfileSchema.parse(req.body)
     const user = await prisma.user.findUniqueOrThrow({ where: { id: req.user!.id } })
 
+    let newEmail: string | undefined
+    if (body.email && body.email.toLowerCase() !== user.email.toLowerCase()) {
+      newEmail = body.email.toLowerCase()
+      // Check if email already used by another account
+      const conflict = await prisma.user.findFirst({
+        where: {
+          email: newEmail,
+          id: { not: user.id },
+        },
+      })
+      if (conflict) {
+        return res.status(409).json({
+          code: 'EMAIL_ALREADY_EXISTS',
+          message: 'Địa chỉ email này đã được sử dụng bởi một tài khoản khác.',
+        })
+      }
+
+      // If user has a password set, require current password verification to protect account
+      if (user.hasPassword) {
+        if (!body.currentPassword || !(await verifyPassword(user.passwordHash, body.currentPassword))) {
+          return res.status(400).json({
+            code: 'INVALID_CURRENT_PASSWORD',
+            message: 'Mật khẩu hiện tại không chính xác để đổi email.',
+          })
+        }
+      }
+    }
+
     let passwordHash: string | undefined
     if (body.newPassword) {
-      // Always require the current password, otherwise a leaked access token is enough to take over the account.
-      if (!body.currentPassword || !(await verifyPassword(user.passwordHash, body.currentPassword))) {
-        return res.status(400).json({ code: 'INVALID_CURRENT_PASSWORD', message: 'Mật khẩu hiện tại không chính xác.' })
+      // If user has a password, require current password
+      if (user.hasPassword) {
+        if (!body.currentPassword || !(await verifyPassword(user.passwordHash, body.currentPassword))) {
+          return res.status(400).json({ code: 'INVALID_CURRENT_PASSWORD', message: 'Mật khẩu hiện tại không chính xác.' })
+        }
       }
       passwordHash = await hashPassword(body.newPassword)
     }
@@ -426,12 +465,21 @@ authRouter.patch('/me', requireAuth, limiters.passwordCheck, async (req: AuthReq
       where: { id: user.id },
       data: {
         ...(body.name ? { name: body.name } : {}),
+        ...(newEmail ? { email: newEmail } : {}),
         ...(body.avatarUrl !== undefined ? { avatarUrl: body.avatarUrl || null } : {}),
-        ...(passwordHash ? { passwordHash } : {}),
+        ...(passwordHash ? { passwordHash, hasPassword: true } : {}),
         ...(body.convertUploads !== undefined ? { convertUploads: body.convertUploads } : {}),
       },
-      select: { id: true, name: true, email: true, avatarUrl: true, status: true, convertUploads: true }
+      select: { id: true, name: true, email: true, avatarUrl: true, status: true, hasPassword: true, convertUploads: true }
     })
+
+    if (newEmail) {
+      await createAuditLog(user.id, 'USER_EMAIL_CHANGED', 'user', user.id, {
+        oldEmail: user.email,
+        newEmail,
+      })
+    }
+
     // A new password signs out every other browser, so someone who knew the old one loses access.
     if (passwordHash) await revokeOtherSessions(user.id, req.user!.sessionId)
 

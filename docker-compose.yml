@@ -18,7 +18,7 @@ services:
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:5173/connected-accounts/google/callback}
-      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-admin@hcdrive.local}
       # Captcha keys live in Settings → Security; these are the older env fallback and the lock-out escape.
       RECAPTCHA_SECRET_KEY: ${RECAPTCHA_SECRET_KEY:-}
       RECAPTCHA_SITE_KEY: ${RECAPTCHA_SITE_KEY:-}
@@ -27,9 +27,9 @@ services:
       TRUST_PROXY: ${TRUST_PROXY:-}
       RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-2000}
       RATE_LIMIT_WINDOW_MINUTES: ${RATE_LIMIT_WINDOW_MINUTES:-15}
-      INITIAL_USER_NAME: ${INITIAL_USER_NAME:-}
-      INITIAL_USER_EMAIL: ${INITIAL_USER_EMAIL:-}
-      INITIAL_USER_PASSWORD: ${INITIAL_USER_PASSWORD:-}
+      INITIAL_USER_NAME: ${INITIAL_USER_NAME:-Admin}
+      INITIAL_USER_EMAIL: ${INITIAL_USER_EMAIL:-admin@hcdrive.local}
+      INITIAL_USER_PASSWORD: ${INITIAL_USER_PASSWORD:-admin}
     ports:
       - "${PORT:-5173}:4000"
 

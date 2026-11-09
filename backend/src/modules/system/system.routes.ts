@@ -465,7 +465,8 @@ systemRouter.post('/users', async (req, res, next) => {
 })
 
 const adminUpdateUserSchema = z.object({
-  name: z.string().min(2).optional(),
+  name: z.string().min(1).optional(),
+  email: z.string().trim().email('Địa chỉ email không hợp lệ').toLowerCase().optional(),
   status: z.enum(['active', 'disabled']).optional(),
   password: z.string().min(6).optional(),
 })
@@ -474,10 +475,22 @@ systemRouter.patch('/users/:id', async (req: AuthRequest, res, next) => {
   try {
     const targetId = String(req.params.id)
     const body = adminUpdateUserSchema.parse(req.body)
-    await prisma.user.findUniqueOrThrow({ where: { id: targetId } })
+    const targetUser = await prisma.user.findUniqueOrThrow({ where: { id: targetId } })
 
     if (body.status === 'disabled' && targetId === req.user!.id) {
       return res.status(400).json({ code: 'CANNOT_DISABLE_SELF', message: 'Bạn không thể tự vô hiệu hoá tài khoản của chính mình.' })
+    }
+
+    if (body.email && body.email.toLowerCase() !== targetUser.email.toLowerCase()) {
+      const emailConflict = await prisma.user.findFirst({
+        where: {
+          email: body.email.toLowerCase(),
+          id: { not: targetId },
+        },
+      })
+      if (emailConflict) {
+        return res.status(409).json({ code: 'EMAIL_ALREADY_EXISTS', message: 'Email này đã được sử dụng bởi một tài khoản khác.' })
+      }
     }
 
     let passwordHash: string | undefined
@@ -489,8 +502,9 @@ systemRouter.patch('/users/:id', async (req: AuthRequest, res, next) => {
       where: { id: targetId },
       data: {
         ...(body.name ? { name: body.name } : {}),
+        ...(body.email ? { email: body.email.toLowerCase() } : {}),
         ...(body.status ? { status: body.status } : {}),
-        ...(passwordHash ? { passwordHash } : {}),
+        ...(passwordHash ? { passwordHash, hasPassword: true } : {}),
       },
       select: { id: true, name: true, email: true, status: true, updatedAt: true }
     })

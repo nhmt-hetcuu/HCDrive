@@ -132,11 +132,12 @@ export function LoginPage() {
           {/* Right Column: Outlined Form with Floating Labels */}
           <div className="flex flex-col justify-center">
             <form onSubmit={submit} className="space-y-6">
-              {/* Email Outlined Input with Floating Label */}
+              {/* Email/Username Outlined Input with Floating Label */}
               <div className="relative">
                 <input
-                  type="email"
+                  type="text"
                   id="login-email"
+                  autoComplete="username"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   onFocus={() => setEmailFocused(true)}

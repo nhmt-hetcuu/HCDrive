@@ -228,6 +228,7 @@ function SidebarContent({
   onManageStorage?: () => void
 }) {
   const { t, lang } = useLanguage()
+  const location = useLocation()
   const vi = lang === 'vi'
   const used = Number(storage?.usedBytes ?? 0)
   const total = Number(storage?.totalBytes ?? 0)
@@ -249,7 +250,13 @@ function SidebarContent({
               ) : null}
               <NavLink
                 to={item.href}
-                onClick={onNavigate}
+                onClick={() => {
+                  onNavigate?.()
+                  if (location.pathname === item.href && !location.search) {
+                    window.dispatchEvent(new Event('hcdrive:refresh-files'))
+                    window.dispatchEvent(new Event('9drive:refresh-files'))
+                  }
+                }}
                 className={({ isActive }) =>
                   cn(
                     'flex h-10 items-center gap-3.5 rounded-full px-4 text-sm font-medium transition-colors',
@@ -357,6 +364,15 @@ export function DriveLayout() {
   })
   const [filterStartDate, setFilterStartDate] = useState(() => isoToDateInput(searchParams.get('startDate')))
   const [filterEndDate, setFilterEndDate] = useState(() => isoToDateInput(searchParams.get('endDate')))
+
+  // Clear header actions and sync search on navigation
+  useEffect(() => {
+    setHeaderActions(null)
+  }, [location.pathname])
+
+  useEffect(() => {
+    setSearchValue(searchParams.get('q') ?? '')
+  }, [searchParams])
 
   // Sync Theme 3-state cycle (light -> dark -> system)
   function cycleTheme() {
@@ -887,7 +903,7 @@ export function DriveLayout() {
         {/* Content Area: Rounded 16px Card (Section 1.1) */}
         <section className="flex-1 min-w-0 pr-4 pb-4 pl-4 lg:pl-0 h-full overflow-hidden flex flex-col">
           <div className="flex-1 min-w-0 rounded-2xl bg-gd-surface border border-slate-200/60 dark:border-slate-800 p-4 sm:p-5 shadow-sm overflow-hidden flex flex-col min-h-0">
-            <Outlet context={{ setHeaderActions } satisfies DriveLayoutContext} />
+            <Outlet key={location.pathname + location.search} context={{ setHeaderActions } satisfies DriveLayoutContext} />
           </div>
         </section>
       </div>

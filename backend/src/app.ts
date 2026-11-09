@@ -60,13 +60,18 @@ function isInternalOrLanOrigin(origin: string): boolean {
   }
 }
 
-// CORS: allow same-origin, configured FRONTEND_URL, LAN / internal IPs, or local dev servers.
-app.use(cors({
-  origin: (origin, callback) => {
-    const allowed = !origin || !env.FRONTEND_URL || origin === env.FRONTEND_URL || isInternalOrLanOrigin(origin)
-    return callback(null, allowed)
-  },
-  credentials: true,
+// CORS: allow same-origin, configured FRONTEND_URL, LAN / internal IPs, or requests to the same host.
+app.use(cors((req, callback) => {
+  const origin = req.header('Origin')
+  const host = (req.header('x-forwarded-host') || req.header('host') || '').split(',')[0].trim()
+  let allowed = !origin || !env.FRONTEND_URL || origin === env.FRONTEND_URL || isInternalOrLanOrigin(origin)
+  if (!allowed && origin && host) {
+    try {
+      const originHost = new URL(origin).host
+      if (originHost === host) allowed = true
+    } catch {}
+  }
+  callback(null, { origin: allowed, credentials: true })
 }))
 
 app.use(express.json({ limit: '1mb' }))

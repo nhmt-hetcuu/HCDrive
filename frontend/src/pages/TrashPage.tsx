@@ -59,6 +59,13 @@ export function TrashPage() {
 
   useEffect(() => {
     loadTrash().catch(() => undefined)
+    function handleReload() {
+      loadTrash().catch(() => undefined)
+    }
+    window.addEventListener('hcdrive:refresh-files', handleReload)
+    window.addEventListener('9drive:refresh-files', handleReload)
+    window.addEventListener('hcdrive:upload-completed', handleReload)
+    window.addEventListener('9drive:upload-completed', handleReload)
     // Files trashed on drive.google.com reach this list through the sync; the server skips it when
     // one ran in the last couple of minutes.
     apiFetch<{ results: { created: number; updated: number; deleted: number }[] }>('/files/sync-google', { method: 'POST', body: JSON.stringify({}) })
@@ -68,6 +75,12 @@ export function TrashPage() {
         }
       })
       .catch(() => undefined)
+    return () => {
+      window.removeEventListener('hcdrive:refresh-files', handleReload)
+      window.removeEventListener('9drive:refresh-files', handleReload)
+      window.removeEventListener('hcdrive:upload-completed', handleReload)
+      window.removeEventListener('9drive:upload-completed', handleReload)
+    }
   }, [])
 
   function toggleSelect(id: string) {

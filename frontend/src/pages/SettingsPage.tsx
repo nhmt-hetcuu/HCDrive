@@ -145,6 +145,7 @@ export function SettingsPage() {
 
   // ================= 2. PROFILE TAB STATES =================
   const [profileName, setProfileName] = useState(user?.name ?? '')
+  const [profileEmail, setProfileEmail] = useState(user?.email ?? '')
   const [profileAvatarUrl, setProfileAvatarUrl] = useState(user?.avatarUrl ?? '')
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
@@ -155,6 +156,16 @@ export function SettingsPage() {
 
   async function handleSaveProfile(e: FormEvent) {
     e.preventDefault()
+    const cleanEmail = profileEmail.trim().toLowerCase()
+    if (!cleanEmail) {
+      showSnackbar(vi ? 'Vui lòng nhập địa chỉ email!' : 'Email is required!')
+      return
+    }
+    const emailChanged = cleanEmail !== (user?.email ?? '').toLowerCase()
+    if (emailChanged && user?.hasPassword && !currentPassword) {
+      showSnackbar(vi ? 'Vui lòng nhập mật khẩu hiện tại bên dưới để đổi địa chỉ email!' : 'Please enter your current password below to change email!')
+      return
+    }
     if (newPassword && newPassword !== confirmPassword) {
       showSnackbar(vi ? 'Mật khẩu xác nhận không khớp!' : 'Passwords do not match!')
       return
@@ -165,6 +176,7 @@ export function SettingsPage() {
         method: 'PATCH',
         body: JSON.stringify({
           name: profileName.trim(),
+          email: cleanEmail,
           avatarUrl: profileAvatarUrl.trim() || null,
           currentPassword: currentPassword || undefined,
           newPassword: newPassword || undefined,
@@ -172,6 +184,7 @@ export function SettingsPage() {
       })
       setUser(res.user)
       updateStoredUser(res.user)
+      setProfileEmail(res.user.email)
       setCurrentPassword('')
       setNewPassword('')
       setConfirmPassword('')
@@ -231,12 +244,25 @@ export function SettingsPage() {
       if (updatedUser) {
         setUser(updatedUser)
         setProfileName(updatedUser.name ?? '')
+        setProfileEmail(updatedUser.email ?? '')
         setProfileAvatarUrl(updatedUser.avatarUrl ?? '')
       }
     }
     window.addEventListener('9drive:user-updated', onUserUpdated)
-    return () => window.removeEventListener('9drive:user-updated', onUserUpdated)
+    window.addEventListener('hcdrive:user-updated', onUserUpdated)
+    return () => {
+      window.removeEventListener('9drive:user-updated', onUserUpdated)
+      window.removeEventListener('hcdrive:user-updated', onUserUpdated)
+    }
   }, [])
+
+  useEffect(() => {
+    if (user) {
+      setProfileName(user.name ?? '')
+      setProfileEmail(user.email ?? '')
+      setProfileAvatarUrl(user.avatarUrl ?? '')
+    }
+  }, [user?.email, user?.name, user?.avatarUrl])
 
   // ================= 3. GOOGLE OAUTH TAB STATES =================
   const [googleClientId, setGoogleClientId] = useState('')
@@ -495,6 +521,42 @@ export function SettingsPage() {
   const [addEmail, setAddEmail] = useState('')
   const [addPassword, setAddPassword] = useState('')
   const [addingUser, setAddingUser] = useState(false)
+
+  const [editingUser, setEditingUser] = useState<ManagedUser | null>(null)
+  const [editName, setEditName] = useState('')
+  const [editEmail, setEditEmail] = useState('')
+  const [editPassword, setEditPassword] = useState('')
+  const [savingEditUser, setSavingEditUser] = useState(false)
+
+  function openEditUser(u: ManagedUser) {
+    setEditingUser(u)
+    setEditName(u.name)
+    setEditEmail(u.email)
+    setEditPassword('')
+  }
+
+  async function handleEditUser(e: FormEvent) {
+    e.preventDefault()
+    if (!editingUser) return
+    setSavingEditUser(true)
+    try {
+      await apiFetch(`/system/users/${editingUser.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          name: editName.trim(),
+          email: editEmail.trim().toLowerCase(),
+          password: editPassword.trim() || undefined,
+        }),
+      })
+      setEditingUser(null)
+      showSnackbar(vi ? 'Đã cập nhật thông tin người dùng!' : 'User updated!')
+      await loadUsersData()
+    } catch (err: any) {
+      showSnackbar(err.message || (vi ? 'Lỗi cập nhật người dùng' : 'Error updating user'))
+    } finally {
+      setSavingEditUser(false)
+    }
+  }
 
   async function loadUsersData() {
     if (!user?.isAdmin) return
@@ -949,12 +1011,29 @@ export function SettingsPage() {
                 />
               </div>
 
-              {/* Email (Read-only) */}
-              <div className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div className="sm:w-56 shrink-0 font-medium text-slate-800 dark:text-slate-200">
+              {/* Email Address */}
+              <div className="py-4 flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+                <div className="sm:w-56 shrink-0 font-medium text-slate-800 dark:text-slate-200 pt-2">
                   {vi ? 'Địa chỉ email' : 'Email address'}
+                  <p className="text-[11px] text-slate-400 font-normal mt-0.5">
+                    {vi ? 'Dùng để đăng nhập hoặc nhận thông báo' : 'Used to sign in and receive notifications'}
+                  </p>
                 </div>
-                <span className="text-slate-600 dark:text-slate-400 font-mono text-xs">{user?.email}</span>
+                <div className="max-w-md w-full">
+                  <input
+                    type="email"
+                    value={profileEmail}
+                    onChange={(e) => setProfileEmail(e.target.value)}
+                    className="w-full h-10 px-3.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent text-slate-900 dark:text-white focus:outline-none focus:border-[#0b57d0]"
+                    required
+                  />
+                  {profileEmail.trim().toLowerCase() !== (user?.email ?? '').toLowerCase() && (
+                    <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1.5 flex items-center gap-1 font-medium">
+                      <span>⚠️</span>
+                      {vi ? 'Vui lòng nhập mật khẩu hiện tại bên dưới để lưu email mới' : 'Please enter current password below to save new email'}
+                    </p>
+                  )}
+                </div>
               </div>
 
               {/* Change Password */}
@@ -1457,15 +1536,25 @@ export function SettingsPage() {
                         </td>
                         <td className="py-3 px-4 text-slate-500">{formatDate(u.createdAt)}</td>
                         <td className="py-3 px-4 text-right">
-                          <Button
-                            variant="text"
-                            size="sm"
-                            disabled={u.isAdmin}
-                            onClick={() => toggleUserStatus(u)}
-                            className="h-7 text-xs"
-                          >
-                            {u.status === 'active' ? (vi ? 'Khoá' : 'Disable') : (vi ? 'Mở khoá' : 'Enable')}
-                          </Button>
+                          <div className="flex items-center justify-end gap-1">
+                            <Button
+                              variant="text"
+                              size="sm"
+                              onClick={() => openEditUser(u)}
+                              className="h-7 text-xs text-[#0b57d0] dark:text-[#a8c7fa]"
+                            >
+                              {vi ? 'Sửa' : 'Edit'}
+                            </Button>
+                            <Button
+                              variant="text"
+                              size="sm"
+                              disabled={u.isAdmin}
+                              onClick={() => toggleUserStatus(u)}
+                              className="h-7 text-xs"
+                            >
+                              {u.status === 'active' ? (vi ? 'Khoá' : 'Disable') : (vi ? 'Mở khoá' : 'Enable')}
+                            </Button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -1690,6 +1779,62 @@ export function SettingsPage() {
             </Button>
             <Button type="submit" variant="filled" size="sm" disabled={addingUser}>
               {addingUser ? (vi ? 'Đang tạo...' : 'Creating...') : (vi ? 'Tạo tài khoản' : 'Add User')}
+            </Button>
+          </div>
+        </form>
+      </DummyModal>
+
+      {/* Modal: Edit User */}
+      <DummyModal
+        open={!!editingUser}
+        title={vi ? 'Chỉnh sửa người dùng' : 'Edit User'}
+        description={vi ? `Cập nhật thông tin cho ${editingUser?.name || 'người dùng'}` : `Update details for ${editingUser?.name || 'user'}`}
+        onClose={() => setEditingUser(null)}
+      >
+        <form onSubmit={handleEditUser} className="space-y-3.5 text-xs">
+          <div>
+            <label className="block text-slate-700 dark:text-slate-300 font-medium mb-1">
+              {vi ? 'Họ và tên' : 'Full Name'}
+            </label>
+            <input
+              type="text"
+              value={editName}
+              onChange={(e) => setEditName(e.target.value)}
+              required
+              className="w-full h-10 px-3.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent text-slate-900 dark:text-white focus:outline-none focus:border-[#0b57d0]"
+            />
+          </div>
+          <div>
+            <label className="block text-slate-700 dark:text-slate-300 font-medium mb-1">
+              {vi ? 'Địa chỉ email' : 'Email Address'}
+            </label>
+            <input
+              type="email"
+              value={editEmail}
+              onChange={(e) => setEditEmail(e.target.value)}
+              required
+              className="w-full h-10 px-3.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent text-slate-900 dark:text-white focus:outline-none focus:border-[#0b57d0]"
+            />
+          </div>
+          <div>
+            <label className="block text-slate-700 dark:text-slate-300 font-medium mb-1">
+              {vi ? 'Mật khẩu mới (bỏ trống nếu không đổi)' : 'New Password (leave blank to keep current)'}
+            </label>
+            <input
+              type="password"
+              minLength={6}
+              value={editPassword}
+              onChange={(e) => setEditPassword(e.target.value)}
+              placeholder="••••••••"
+              className="w-full h-10 px-3.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-transparent text-slate-900 dark:text-white focus:outline-none focus:border-[#0b57d0]"
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="text" size="sm" onClick={() => setEditingUser(null)}>
+              {vi ? 'Huỷ' : 'Cancel'}
+            </Button>
+            <Button type="submit" variant="filled" size="sm" disabled={savingEditUser}>
+              {savingEditUser ? (vi ? 'Đang lưu...' : 'Saving...') : (vi ? 'Lưu thay đổi' : 'Save Changes')}
             </Button>
           </div>
         </form>

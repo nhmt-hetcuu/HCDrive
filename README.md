@@ -116,8 +116,9 @@ Mở `.env` và đổi tối thiểu các giá trị sau:
 FRONTEND_URL=http://localhost:5173        # địa chỉ bạn mở HCDrive, ví dụ https://drive.example.com
 JWT_ACCESS_SECRET=<chuỗi ngẫu nhiên, tối thiểu 32 ký tự>
 TOKEN_ENCRYPTION_KEY=<chuỗi ngẫu nhiên, tối thiểu 32 ký tự>
-INITIAL_USER_EMAIL=admin@example.com      # tài khoản quản trị tạo lần đầu
-INITIAL_USER_PASSWORD=<mật khẩu mạnh>
+INITIAL_USER_NAME=Admin                   # tên đăng nhập (đăng nhập bằng Username hoặc Email)
+INITIAL_USER_EMAIL=admin@hcdrive.local    # email quản trị
+INITIAL_USER_PASSWORD=<mật khẩu mạnh>     # nếu đổi trong .env, container tự đồng bộ khi restart
 ```
 
 Tạo chuỗi ngẫu nhiên:
@@ -161,7 +162,7 @@ docker compose down                 # dừng (dữ liệu vẫn còn trong volum
 | `REFRESH_TOKEN_TTL_DAYS` | Thời hạn phiên đăng nhập (ngày) | `30` |
 | `MAX_UPLOAD_BYTES` | Dung lượng tối đa một tệp tải lên | `5368709120` (5 GB) |
 | `ADMIN_EMAILS` | Email quản trị, phân cách bằng dấu phẩy; để trống thì người đăng ký đầu tiên là quản trị | — |
-| `INITIAL_USER_NAME` / `_EMAIL` / `_PASSWORD` | Tạo sẵn tài khoản đầu tiên khi cơ sở dữ liệu còn trống | — |
+| `INITIAL_USER_NAME` / `_EMAIL` / `_PASSWORD` | Tự động tạo hoặc đồng bộ mật khẩu tài khoản quản trị khi khởi động (hỗ trợ đăng nhập bằng cả Email hoặc Username) | `Admin` / `admin@hcdrive.local` / `admin` |
 | `GOOGLE_CLIENT_ID` / `_SECRET` / `_REDIRECT_URI` | OAuth client riêng (có thể nhập sau trong Cài đặt) | — |
 | `TRUST_PROXY` | Để trống: tự nhận diện Cloudflare / nginx. Đặt `false` để không tin proxy nào | — |
 | `RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW_MINUTES` | Số request API mỗi người dùng trong một khoảng thời gian | `2000` / `15` |

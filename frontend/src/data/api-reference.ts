@@ -217,13 +217,14 @@ export function buildEndpoints(baseUrl: string): Endpoint[] {
     },
     {
       id: 'auth-me-update', method: 'PATCH', path: '/auth/me', category: 'auth', ...bearer,
-      titleVi: 'Cập nhật hồ sơ / đổi mật khẩu', titleEn: 'Update profile / change password',
-      descVi: 'Đổi tên, ảnh đại diện, tuỳ chọn chuyển đổi tệp Office; đổi mật khẩu cần currentPassword.',
-      descEn: 'Changes name, avatar, the Office conversion preference; changing the password needs currentPassword.',
+      titleVi: 'Cập nhật hồ sơ / đổi email / đổi mật khẩu', titleEn: 'Update profile / change email / password',
+      descVi: 'Đổi tên, địa chỉ email, ảnh đại diện, tuỳ chọn chuyển đổi tệp Office; đổi email hoặc mật khẩu cần currentPassword.',
+      descEn: 'Changes name, email address, avatar, Office conversion preference; changing email or password needs currentPassword.',
       params: [
         p.body('name', 'string', false, 'Tên mới (1–100 ký tự)', 'New name (1–100 chars)'),
+        p.body('email', 'string', false, 'Địa chỉ email mới (cần currentPassword)', 'New email address (requires currentPassword)'),
         p.body('avatarUrl', 'string | null', false, 'URL ảnh đại diện, null để xoá', 'Avatar URL, null to clear'),
-        p.body('currentPassword', 'string', false, 'Mật khẩu hiện tại (bắt buộc khi đổi mật khẩu)', 'Current password (required to change it)'),
+        p.body('currentPassword', 'string', false, 'Mật khẩu hiện tại (bắt buộc khi đổi email hoặc mật khẩu)', 'Current password (required to change email or password)'),
         p.body('newPassword', 'string', false, 'Mật khẩu mới, tối thiểu 6 ký tự', 'New password, at least 6 chars'),
         p.body('convertUploads', 'boolean', false, 'Tự chuyển Word/Excel/PowerPoint thành Google Docs khi tải lên', 'Convert Office uploads to Google Docs'),
       ],

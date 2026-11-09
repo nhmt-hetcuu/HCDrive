@@ -86,6 +86,19 @@ export function StarredPage() {
 
   useEffect(() => {
     loadStarred()
+    function handleReload() {
+      loadStarred()
+    }
+    window.addEventListener('hcdrive:refresh-files', handleReload)
+    window.addEventListener('9drive:refresh-files', handleReload)
+    window.addEventListener('hcdrive:upload-completed', handleReload)
+    window.addEventListener('9drive:upload-completed', handleReload)
+    return () => {
+      window.removeEventListener('hcdrive:refresh-files', handleReload)
+      window.removeEventListener('9drive:refresh-files', handleReload)
+      window.removeEventListener('hcdrive:upload-completed', handleReload)
+      window.removeEventListener('9drive:upload-completed', handleReload)
+    }
   }, [])
 
   // Accounts for FilterChips
