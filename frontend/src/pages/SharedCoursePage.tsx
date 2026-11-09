@@ -849,13 +849,18 @@ function SharedLessonPlayer({ lesson, vi }: { lesson: Lesson; vi: boolean }) {
     setVideoError(false)
   }, [lesson.id])
 
+  const [isBuffering, setIsBuffering] = useState(false)
+
   const mediaProps = {
     controls: true,
     autoPlay: true,
     src: src ?? undefined,
+    onWaiting: () => setIsBuffering(true),
+    onPlaying: () => setIsBuffering(false),
+    onLoadedData: () => setIsBuffering(false),
     onError: () => {
+      setIsBuffering(false)
       setVideoError(true)
-      if (lesson.previewUrl) setPlayerMode('google')
     },
   }
 
@@ -866,7 +871,7 @@ function SharedLessonPlayer({ lesson, vi }: { lesson: Lesson; vi: boolean }) {
           <div className="flex items-center justify-between gap-2 px-1 text-xs text-slate-500 dark:text-slate-400">
             <span className="flex items-center gap-1.5 font-medium">
               <span className="inline-block h-2 w-2 rounded-full bg-amber-500" />
-              {vi ? 'Trình phát Google Drive (Bypass quyền khóa)' : 'Google Drive Player (Bypass restrictions)'}
+              {vi ? 'Trình phát Google Drive (Yêu cầu tài khoản có quyền)' : 'Google Drive Player (Requires authorized account)'}
             </span>
             {src && (
               <button
@@ -875,7 +880,7 @@ function SharedLessonPlayer({ lesson, vi }: { lesson: Lesson; vi: boolean }) {
                 className="flex items-center gap-1 rounded-md px-2 py-1 font-medium text-[#0b57d0] hover:bg-blue-50 dark:text-[#a8c7fa] dark:hover:bg-blue-950/40 transition cursor-pointer"
               >
                 <RefreshCw className="h-3 w-3" />
-                {vi ? 'Dùng Trình phát HCDrive' : 'Use HCDrive Player'}
+                {vi ? 'Dùng Trình phát HCDrive (Server Cache)' : 'Use HCDrive Player (Server Cache)'}
               </button>
             )}
           </div>
@@ -897,13 +902,18 @@ function SharedLessonPlayer({ lesson, vi }: { lesson: Lesson; vi: boolean }) {
             <div className="flex items-center justify-between gap-2 px-1 text-xs text-slate-500 dark:text-slate-400">
               <span className="flex items-center gap-1.5 font-medium">
                 <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
-                {vi ? 'Trình phát HCDrive' : 'HCDrive Player'}
+                {vi ? 'Trình phát HCDrive (Bypass & Cache 30 phút)' : 'HCDrive Player (Bypass & 30-min Cache)'}
+                {isBuffering && (
+                  <span className="text-[11px] text-amber-500 animate-pulse">
+                    ({vi ? 'Đang chuẩn bị stream...' : 'Buffering stream...'})
+                  </span>
+                )}
               </span>
               <button
                 type="button"
                 onClick={() => setPlayerMode('google')}
-                className="flex items-center gap-1 rounded-md px-2 py-1 font-medium text-[#0b57d0] hover:bg-blue-50 dark:text-[#a8c7fa] dark:hover:bg-blue-950/40 transition cursor-pointer"
-                title={vi ? 'Chuyển sang Trình phát Google Drive nếu video bị khóa tải' : 'Switch to Google Drive Player if download is locked'}
+                className="flex items-center gap-1 rounded-md px-2 py-1 font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800 transition cursor-pointer"
+                title={vi ? 'Chuyển sang Google Player nếu bạn đã đăng nhập đúng email Google được share' : 'Switch to Google Player if signed into authorized Google account'}
               >
                 <RefreshCw className="h-3 w-3" />
                 {vi ? 'Đổi sang Trình phát Google' : 'Switch to Google Player'}
@@ -918,21 +928,38 @@ function SharedLessonPlayer({ lesson, vi }: { lesson: Lesson; vi: boolean }) {
     // Video error with fallback
     return (
       <div className="rounded-2xl border border-slate-200 p-8 text-center text-sm text-slate-600 dark:border-slate-800 dark:text-slate-300">
-        <p>{vi ? 'Không thể phát video bằng trình phát trực tiếp (quyền Google Drive bị khóa).' : 'Cannot stream video directly (Google Drive permission locked).'}</p>
-        {lesson.previewUrl ? (
+        <p className="font-medium text-slate-800 dark:text-slate-200">
+          {vi ? 'Không thể phát video ngay hoặc video đang được máy chủ tải vào bộ đệm cache.' : 'Unable to stream video or file is being cached on server.'}
+        </p>
+        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+          {vi ? 'Máy chủ HCDrive đang tải tệp về server và lưu trữ 30 phút để phát mượt mà không giới hạn quyền.' : 'HCDrive server is caching the file for 30 minutes to enable smooth unrestricted playback.'}
+        </p>
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
           <button
             type="button"
-            onClick={() => { setVideoError(false); setPlayerMode('google') }}
-            className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-[#0b57d0] px-4 py-2 text-xs font-medium text-white hover:bg-[#0b57d0]/90 transition cursor-pointer"
+            onClick={() => {
+              setVideoError(false)
+              setPlayerMode('hcdrive')
+              if (mediaRef.current) {
+                mediaRef.current.load()
+              }
+            }}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-[#0b57d0] px-4 py-2 text-xs font-medium text-white hover:bg-[#0b57d0]/90 transition cursor-pointer"
           >
             <RefreshCw className="h-3.5 w-3.5" />
-            {vi ? 'Mở bằng Trình phát Google Drive' : 'Open with Google Drive Player'}
+            {vi ? 'Thử lại phát HCDrive' : 'Retry HCDrive Stream'}
           </button>
-        ) : lesson.webViewLink ? (
-          <a href={lesson.webViewLink} target="_blank" rel="noreferrer" className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-[#0b57d0] hover:underline dark:text-[#a8c7fa]">
-            <ExternalLink className="h-3.5 w-3.5" />{vi ? 'Mở trực tiếp trên Google Drive' : 'Open in Google Drive'}
-          </a>
-        ) : null}
+          {lesson.previewUrl && (
+            <button
+              type="button"
+              onClick={() => { setVideoError(false); setPlayerMode('google') }}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 transition cursor-pointer"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              {vi ? 'Thử Trình phát Google Drive' : 'Try Google Drive Player'}
+            </button>
+          )}
+        </div>
       </div>
     )
   }

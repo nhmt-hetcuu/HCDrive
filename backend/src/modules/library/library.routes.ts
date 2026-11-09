@@ -1,3 +1,4 @@
+import fs from 'node:fs'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { Router } from 'express'
@@ -17,6 +18,7 @@ import { signId, verifySignedId } from '../../utils/signed-url.js'
 import { decryptText, encryptText, hashToken, randomToken } from '../../utils/crypto.js'
 import { isGoogleRateLimit } from '../../utils/google-backoff.js'
 import { mapLimit } from '../../utils/concurrency.js'
+import { streamCachedOrFetch, readCacheMeta, touchCache, getCacheDataPath } from '../../services/temp-cache.service.js'
 
 // Library of Drive links other people shared with the user (bought courses, lesson folders, documents).
 // HCDrive opens them through the user's own Google account that received the share, so it can only
@@ -212,46 +214,63 @@ libraryRouter.get('/stream/:token', async (req, res, next) => {
 
     const rk = typeof req.query.rk === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(req.query.rk) ? req.query.rk : null
     const resourceKey = fileId === link.driveFileId ? link.resourceKey : rk
-    const auth = await getAuthedGoogleClient(account)
     const range = typeof req.headers.range === 'string' ? req.headers.range : undefined
-    let response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&supportsAllDrives=true`, {
-      dispatcher: getUndiciDispatcher(getAccountProxyUrl(account)),
-      headers: { ...normalizeHeaders(await auth.getRequestHeaders()), ...resourceKeyHeaders(fileId, resourceKey), ...(range ? { Range: range } : {}) },
-    } as any)
 
-    if (!response.ok) {
-      // Attempt bypass for blocked Google Drive download
-      const bypass = await attemptGoogleBypassStream(account, fileId, resourceKey, range)
-      if (bypass && bypass.ok) {
-        response = bypass
-      } else {
-        const text = await response.text().catch(() => '')
-        noteGoogleError(account.id, { status: response.status, message: text })
-        return res.status(response.status === 401 ? 502 : response.status).json({ code: 'GOOGLE_FILE_STREAM_FAILED', message: text || response.statusText })
+    // Stream from 30-minute server cache or download to cache and stream with full Range support
+    const cachedSuccess = await streamCachedOrFetch(
+      fileId,
+      downloadName || 'file',
+      range,
+      res,
+      async () => {
+        const auth = await getAuthedGoogleClient(account)
+        const headers = normalizeHeaders(await auth.getRequestHeaders())
+        const dispatcher = getUndiciDispatcher(getAccountProxyUrl(account))
+        const rkHeaders = resourceKeyHeaders(fileId, resourceKey)
+        let response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&supportsAllDrives=true`, {
+          dispatcher,
+          headers: { ...headers, ...rkHeaders },
+        } as any)
+
+        if (!response.ok) {
+          // Attempt bypass for blocked Google Drive download
+          const bypass = await attemptGoogleBypassStream(account, fileId, resourceKey)
+          if (bypass && bypass.ok) {
+            response = bypass
+          } else {
+            const text = await response.text().catch(() => '')
+            noteGoogleError(account.id, { status: response.status, message: text })
+            return null
+          }
+        }
+
+        const contentType = response.headers.get('content-type') ?? ''
+        if (contentType.includes('text/html') && !response.headers.get('content-disposition')?.includes('attachment')) {
+          return null
+        }
+
+        const contentLength = response.headers.get('content-length')
+        const sizeBytes = contentLength ? parseInt(contentLength, 10) : undefined
+        if (!response.body) return null
+
+        return {
+          stream: response.body,
+          contentType: contentType || 'application/octet-stream',
+          sizeBytes,
+        }
+      },
+      {
+        disposition: downloadName ? 'attachment' : 'inline',
+        fileName: downloadName || undefined,
       }
-    }
+    )
 
-    const contentType = response.headers.get('content-type') ?? ''
-    if (contentType.includes('text/html') && !response.headers.get('content-disposition')?.includes('attachment')) {
+    if (!cachedSuccess && !res.headersSent) {
       return res.status(403).json({
         code: 'GOOGLE_STREAM_RESTRICTED',
-        message: 'Google Drive giới hạn quyền stream/tải tệp này. Vui lòng mở bằng Trình phát Google Drive.',
+        message: 'Google Drive giới hạn quyền stream/tải tệp này hoặc không thể kết nối tới Google Drive.',
       })
     }
-
-    res.status(response.status)
-    for (const header of ['content-type', 'content-length', 'content-range']) {
-      const value = response.headers.get(header)
-      if (value) res.setHeader(header, value)
-    }
-    res.setHeader('Accept-Ranges', 'bytes')
-    // ?download=<name>: save as a file instead of playing (the name is cosmetic; the token decides the file).
-    res.setHeader('Content-Disposition', downloadName ? `attachment; filename="${downloadName.replace(/[^\x20-\x7e]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(downloadName)}` : 'inline')
-    res.setHeader('Cache-Control', 'private, max-age=3600')
-    if (!response.body) return res.end()
-    await pipeline(Readable.fromWeb(response.body as any), res).catch(() => {
-      if (!res.destroyed) res.destroy()
-    })
   } catch (error) {
     return next(error)
   }
@@ -375,6 +394,16 @@ libraryRouter.get('/download/:token', async (req, res, next) => {
     for (const entry of entries) {
       if (closed) break
       try {
+        // If file is already cached in temp cache, read directly from server disk
+        const cached = readCacheMeta(entry.id)
+        if (cached) {
+          touchCache(entry.id)
+          const added = new Promise((resolve) => archive.once('entry', resolve))
+          archive.append(fs.createReadStream(getCacheDataPath(entry.id)), { name: `${zipName}/${entry.path}` })
+          await added
+          continue
+        }
+
         // Asked per file: a long download outlives the hour an access token lasts.
         const auth = await getAuthedGoogleClient(account)
         const exportTarget = googleDownloadExportMimeTypes[entry.mimeType]
@@ -1067,6 +1096,25 @@ async function copyFolderTree(
     }
 
     // Direct media stream from source
+    if (!copied) {
+      const cached = readCacheMeta(id)
+      if (cached) {
+        try {
+          touchCache(id)
+          await withRetry(targetAccount.id, () => targetDrive.files.create({
+            requestBody: { name: file.name ?? id, parents: [targetParentId] },
+            media: { mimeType: cached.contentType || file.mimeType || 'application/octet-stream', body: fs.createReadStream(getCacheDataPath(id)) },
+            fields: 'id',
+            supportsAllDrives: true,
+          }))
+          job.copied += 1
+          copied = true
+        } catch {
+          // fallback to direct media stream
+        }
+      }
+    }
+
     if (!copied) {
       try {
         const res = await withRetry(sourceAccount.id, () => sourceDrive.files.get(

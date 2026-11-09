@@ -5,6 +5,7 @@ import type { ConnectedAccount, File } from '@prisma/client'
 import { prisma } from '../../config/prisma.js'
 import { getAuthedGoogleClient, getGoogleDriveClient } from '../google/google.service.js'
 import { getAccountProxyUrl, getUndiciDispatcher } from '../../utils/proxy.js'
+import { streamCachedOrFetch } from '../../services/temp-cache.service.js'
 
 type FileWithAccount = File & { connectedAccount: ConnectedAccount }
 type StreamOptions = { disposition?: 'inline' | 'attachment'; exportMimeType?: string; exportExtension?: string }
@@ -215,6 +216,51 @@ export async function streamGoogleFile(original: FileWithAccount, range: string 
   const url = exportTarget
     ? `https://www.googleapis.com/drive/v3/files/${file.providerFileId}/export?mimeType=${encodeURIComponent(exportTarget.mimeType)}`
     : `https://www.googleapis.com/drive/v3/files/${file.providerFileId}?alt=media`
+
+  // Cache video/file on server for 30 minutes and stream with Range support
+  const cacheKey = exportTarget ? `${file.providerFileId}_export_${exportTarget.extension}` : file.providerFileId
+  const cachedSuccess = await streamCachedOrFetch(
+    cacheKey,
+    responseFileName,
+    range,
+    res,
+    async () => {
+      let dlResponse = await fetch(url, {
+        dispatcher,
+        headers,
+      } as any)
+
+      if (!dlResponse.ok) {
+        if (dlResponse.status === 404 && file === original) {
+          await prisma.file.update({ where: { id: file.id }, data: { status: 'deleted', deletedAt: new Date() } }).catch(() => undefined)
+          return null
+        }
+        // Attempt bypass for restricted Google Drive files (e.g. 403 cannotDownloadFile)
+        const bypass = await attemptGoogleBypassStream(original.connectedAccount, file.providerFileId, null)
+        if (bypass && (bypass.status === 200 || bypass.status === 206)) {
+          dlResponse = bypass
+        } else {
+          return null
+        }
+      }
+
+      if (!dlResponse.body) return null
+      const cLength = dlResponse.headers.get('content-length')
+      return {
+        stream: dlResponse.body,
+        contentType: responseMimeType,
+        sizeBytes: cLength ? parseInt(cLength, 10) : undefined,
+      }
+    },
+    {
+      disposition: options.disposition,
+      fileName: responseFileName,
+    }
+  )
+
+  if (cachedSuccess) return
+
+  // Fallback to direct stream/error if caching could not be completed
   let response = await fetch(url, {
     dispatcher,
     headers: {
