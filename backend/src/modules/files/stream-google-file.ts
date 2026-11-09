@@ -34,6 +34,167 @@ export function normalizeHeaders(headers: Headers | Record<string, string>) {
   return headers
 }
 
+export function resourceKeyHeaders(fileId: string, resourceKey: string | null | undefined): Record<string, string> {
+  if (!resourceKey) return {}
+  return { 'X-Goog-Drive-Resource-Keys': `${fileId}/${resourceKey}` }
+}
+
+/** Attempts to bypass Google Drive download restrictions by fetching stream from drive.usercontent.google.com / preview player / videoplayback / export */
+export async function attemptGoogleBypassStream(
+  account: ConnectedAccount,
+  fileId: string,
+  resourceKey: string | null = null,
+  range?: string
+): Promise<globalThis.Response | null> {
+  try {
+    const auth = await getAuthedGoogleClient(account)
+    const tokenObj = await auth.getAccessToken().catch(() => null)
+    const accessToken = tokenObj?.token || null
+    const authHeaders = normalizeHeaders(await auth.getRequestHeaders())
+    const dispatcher = getUndiciDispatcher(getAccountProxyUrl(account))
+    const rkHeaders = resourceKeyHeaders(fileId, resourceKey)
+    const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+
+    // Strategy 1: Modern endpoint drive.usercontent.google.com with Bearer token & access_token query param
+    const usercontentUrl = `https://drive.usercontent.google.com/download?id=${fileId}&export=download&confirm=t&authuser=0${accessToken ? `&access_token=${accessToken}` : ''}${resourceKey ? `&resourcekey=${resourceKey}` : ''}`
+    const ucRes = await fetch(usercontentUrl, {
+      dispatcher,
+      headers: {
+        ...authHeaders,
+        ...rkHeaders,
+        ...(range ? { Range: range } : {}),
+        'User-Agent': ua,
+        'Referer': 'https://drive.google.com/',
+        'Accept': '*/*',
+      },
+      redirect: 'follow',
+    } as any).catch(() => null)
+
+    if (ucRes && (ucRes.status === 200 || ucRes.status === 206)) {
+      const cType = ucRes.headers.get('content-type') ?? ''
+      if (!cType.includes('text/html') || ucRes.headers.get('content-disposition')?.includes('attachment')) {
+        return ucRes
+      }
+      // If HTML was returned, check for virus scan / large-file confirmation form (<form id="download-form" action="...">)
+      const html = await ucRes.text().catch(() => '')
+      const formMatch = html.match(/<form[^>]+action="([^"]+)"/i)
+      if (formMatch?.[1]) {
+        let actionUrl = formMatch[1].replace(/&amp;/g, '&')
+        if (actionUrl.startsWith('/')) actionUrl = `https://drive.usercontent.google.com${actionUrl}`
+        const inputMatches = html.matchAll(/<input[^>]+name="([^"]+)"[^>]+value="([^"]*)"/gi)
+        const params = new URLSearchParams()
+        for (const m of inputMatches) params.append(m[1], m[2])
+        if (accessToken && !params.has('access_token')) params.append('access_token', accessToken)
+        const confirmUrl = actionUrl.includes('?') ? `${actionUrl}&${params.toString()}` : `${actionUrl}?${params.toString()}`
+        const formRes = await fetch(confirmUrl, {
+          dispatcher,
+          headers: {
+            ...authHeaders,
+            ...rkHeaders,
+            ...(range ? { Range: range } : {}),
+            'User-Agent': ua,
+            'Referer': 'https://drive.google.com/',
+            'Accept': '*/*',
+          },
+          redirect: 'follow',
+        } as any).catch(() => null)
+        if (formRes && (formRes.status === 200 || formRes.status === 206)) {
+          const formCType = formRes.headers.get('content-type') ?? ''
+          if (!formCType.includes('text/html') || formRes.headers.get('content-disposition')?.includes('attachment')) {
+            return formRes
+          }
+        }
+      }
+    }
+
+    // Strategy 2: Legacy drive.google.com/uc?id=${fileId}&export=download&confirm=t
+    const legacyUcUrl = `https://drive.google.com/uc?id=${fileId}&export=download&confirm=t&authuser=0${accessToken ? `&access_token=${accessToken}` : ''}${resourceKey ? `&resourcekey=${resourceKey}` : ''}`
+    const legacyRes = await fetch(legacyUcUrl, {
+      dispatcher,
+      headers: {
+        ...authHeaders,
+        ...rkHeaders,
+        ...(range ? { Range: range } : {}),
+        'User-Agent': ua,
+        'Referer': 'https://drive.google.com/',
+      },
+      redirect: 'follow',
+    } as any).catch(() => null)
+
+    if (legacyRes && (legacyRes.status === 200 || legacyRes.status === 206)) {
+      const cType = legacyRes.headers.get('content-type') ?? ''
+      if (!cType.includes('text/html') || legacyRes.headers.get('content-disposition')?.includes('attachment')) {
+        return legacyRes
+      }
+    }
+
+    // Strategy 3: Check Google Drive preview page for videoplayback / stream URLs
+    const previewUrl = `https://drive.google.com/file/d/${fileId}/preview${resourceKey ? `?resourcekey=${resourceKey}` : ''}`
+    const previewRes = await fetch(previewUrl, {
+      dispatcher,
+      headers: {
+        ...authHeaders,
+        ...rkHeaders,
+        'User-Agent': ua,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      },
+    } as any).catch(() => null)
+
+    if (previewRes && previewRes.ok) {
+      const html = await previewRes.text().catch(() => '')
+      const streamMatch = html.match(/(https?:\\\/\\\/[^\s"']+(?:googlevideo\.com|drive\.google\.com)\\\/videoplayback[^\s"']*)/i)
+        || html.match(/(https?:\/\/[^\s"']+(?:googlevideo\.com|drive\.google\.com)\/videoplayback[^\s"']*)/i)
+
+      if (streamMatch?.[1]) {
+        const streamUrl = streamMatch[1].replace(/\\u0026/g, '&').replace(/\\\//g, '/')
+        const videoRes = await fetch(streamUrl, {
+          dispatcher,
+          headers: {
+            ...authHeaders,
+            ...(range ? { Range: range } : {}),
+            'User-Agent': ua,
+          },
+        } as any).catch(() => null)
+        if (videoRes && (videoRes.status === 200 || videoRes.status === 206)) return videoRes
+      }
+
+      const fmtMatch = html.match(/"url_encoded_fmt_stream_map"\s*:\s*"([^"]+)"/) || html.match(/"fmt_stream_map"\s*:\s*"([^"]+)"/)
+      if (fmtMatch?.[1]) {
+        const rawMap = fmtMatch[1].replace(/\\u0026/g, '&')
+        const urls = rawMap.split(',').map((part) => {
+          const urlParam = part.split('&').find((p) => p.startsWith('url='))
+          return urlParam ? decodeURIComponent(urlParam.slice(4)) : null
+        }).filter(Boolean) as string[]
+        if (urls.length > 0) {
+          const fmtRes = await fetch(urls[0], {
+            dispatcher,
+            headers: {
+              ...(range ? { Range: range } : {}),
+              'User-Agent': ua,
+            },
+          } as any).catch(() => null)
+          if (fmtRes && (fmtRes.status === 200 || fmtRes.status === 206)) return fmtRes
+        }
+      }
+    }
+
+    // Strategy 4: Google Docs export for docs/sheets/slides
+    const drive = getGoogleDriveClient(auth, getAccountProxyUrl(account))
+    const meta = await drive.files.get({ fileId, fields: 'mimeType,name', supportsAllDrives: true }, { headers: rkHeaders }).catch(() => null)
+    if (meta?.data.mimeType && googleDownloadExportMimeTypes[meta.data.mimeType]) {
+      const target = googleDownloadExportMimeTypes[meta.data.mimeType]
+      const expRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=${encodeURIComponent(target.mimeType)}`, {
+        dispatcher,
+        headers: { ...authHeaders, ...rkHeaders },
+      } as any).catch(() => null)
+      if (expRes && (expRes.status === 200 || expRes.status === 206)) return expRes
+    }
+
+    return null
+  } catch {
+    return null
+  }
+}
 
 export async function streamGoogleFile(original: FileWithAccount, range: string | undefined, res: Response, options: StreamOptions = {}) {
   const proxyUrl = getAccountProxyUrl(original.connectedAccount)
@@ -54,7 +215,7 @@ export async function streamGoogleFile(original: FileWithAccount, range: string 
   const url = exportTarget
     ? `https://www.googleapis.com/drive/v3/files/${file.providerFileId}/export?mimeType=${encodeURIComponent(exportTarget.mimeType)}`
     : `https://www.googleapis.com/drive/v3/files/${file.providerFileId}?alt=media`
-  const response = await fetch(url, {
+  let response = await fetch(url, {
     dispatcher,
     headers: {
       ...headers,
@@ -67,9 +228,14 @@ export async function streamGoogleFile(original: FileWithAccount, range: string 
       await prisma.file.update({ where: { id: file.id }, data: { status: 'deleted', deletedAt: new Date() } }).catch(() => undefined)
       return res.status(404).json({ code: 'FILE_NOT_FOUND', message: 'Tệp đã bị xóa trên Google Drive.' })
     }
-    const message = await response.text().catch(() => response.statusText)
-    // A Google 401 must not reach the browser as-is: the frontend would read it as an expired HCDrive session.
-    return res.status(response.status === 401 ? 502 : response.status).json({ code: 'GOOGLE_FILE_STREAM_FAILED', message: message || response.statusText })
+    // Attempt bypass for restricted Google Drive files (e.g. 403 cannotDownloadFile)
+    const bypass = await attemptGoogleBypassStream(original.connectedAccount, file.providerFileId, null, range)
+    if (bypass && (bypass.status === 200 || bypass.status === 206)) {
+      response = bypass
+    } else {
+      const message = await response.text().catch(() => response.statusText)
+      return res.status(response.status === 401 ? 502 : response.status).json({ code: 'GOOGLE_FILE_STREAM_FAILED', message: message || response.statusText })
+    }
   }
 
   res.status(response.status)

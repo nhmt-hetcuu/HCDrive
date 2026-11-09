@@ -16,6 +16,7 @@ import {
   LogIn,
   PlayCircle,
   Plus,
+  RefreshCw,
   SkipForward,
   UserRound,
 } from 'lucide-react'
@@ -838,17 +839,102 @@ export function SharedCoursePage() {
 }
 
 function SharedLessonPlayer({ lesson, vi }: { lesson: Lesson; vi: boolean }) {
+  const [playerMode, setPlayerMode] = useState<'hcdrive' | 'google'>('hcdrive')
+  const [videoError, setVideoError] = useState(false)
   const mediaRef = useRef<HTMLVideoElement | HTMLAudioElement | null>(null)
   const src = lesson.streamUrl ? `${API_URL}${lesson.streamUrl}` : null
+
+  useEffect(() => {
+    setPlayerMode('hcdrive')
+    setVideoError(false)
+  }, [lesson.id])
 
   const mediaProps = {
     controls: true,
     autoPlay: true,
     src: src ?? undefined,
+    onError: () => {
+      setVideoError(true)
+      if (lesson.previewUrl) setPlayerMode('google')
+    },
   }
 
-  if (src && lesson.mimeType.startsWith('video/')) {
-    return <video ref={(node) => { mediaRef.current = node }} {...mediaProps} className="aspect-video w-full rounded-2xl bg-black shadow-md" />
+  if (lesson.mimeType.startsWith('video/')) {
+    if (playerMode === 'google' || (!src && lesson.previewUrl)) {
+      return (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-2 px-1 text-xs text-slate-500 dark:text-slate-400">
+            <span className="flex items-center gap-1.5 font-medium">
+              <span className="inline-block h-2 w-2 rounded-full bg-amber-500" />
+              {vi ? 'Trình phát Google Drive (Bypass quyền khóa)' : 'Google Drive Player (Bypass restrictions)'}
+            </span>
+            {src && (
+              <button
+                type="button"
+                onClick={() => { setVideoError(false); setPlayerMode('hcdrive') }}
+                className="flex items-center gap-1 rounded-md px-2 py-1 font-medium text-[#0b57d0] hover:bg-blue-50 dark:text-[#a8c7fa] dark:hover:bg-blue-950/40 transition cursor-pointer"
+              >
+                <RefreshCw className="h-3 w-3" />
+                {vi ? 'Dùng Trình phát HCDrive' : 'Use HCDrive Player'}
+              </button>
+            )}
+          </div>
+          <iframe
+            src={lesson.previewUrl || undefined}
+            title={lesson.name}
+            allow="autoplay; fullscreen"
+            allowFullScreen
+            className="aspect-video w-full rounded-2xl border border-slate-200 bg-black shadow-md dark:border-slate-800"
+          />
+        </div>
+      )
+    }
+
+    if (src && !videoError) {
+      return (
+        <div className="space-y-2">
+          {lesson.previewUrl && (
+            <div className="flex items-center justify-between gap-2 px-1 text-xs text-slate-500 dark:text-slate-400">
+              <span className="flex items-center gap-1.5 font-medium">
+                <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
+                {vi ? 'Trình phát HCDrive' : 'HCDrive Player'}
+              </span>
+              <button
+                type="button"
+                onClick={() => setPlayerMode('google')}
+                className="flex items-center gap-1 rounded-md px-2 py-1 font-medium text-[#0b57d0] hover:bg-blue-50 dark:text-[#a8c7fa] dark:hover:bg-blue-950/40 transition cursor-pointer"
+                title={vi ? 'Chuyển sang Trình phát Google Drive nếu video bị khóa tải' : 'Switch to Google Drive Player if download is locked'}
+              >
+                <RefreshCw className="h-3 w-3" />
+                {vi ? 'Đổi sang Trình phát Google' : 'Switch to Google Player'}
+              </button>
+            </div>
+          )}
+          <video ref={(node) => { mediaRef.current = node }} {...mediaProps} className="aspect-video w-full rounded-2xl bg-black shadow-md" />
+        </div>
+      )
+    }
+
+    // Video error with fallback
+    return (
+      <div className="rounded-2xl border border-slate-200 p-8 text-center text-sm text-slate-600 dark:border-slate-800 dark:text-slate-300">
+        <p>{vi ? 'Không thể phát video bằng trình phát trực tiếp (quyền Google Drive bị khóa).' : 'Cannot stream video directly (Google Drive permission locked).'}</p>
+        {lesson.previewUrl ? (
+          <button
+            type="button"
+            onClick={() => { setVideoError(false); setPlayerMode('google') }}
+            className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-[#0b57d0] px-4 py-2 text-xs font-medium text-white hover:bg-[#0b57d0]/90 transition cursor-pointer"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            {vi ? 'Mở bằng Trình phát Google Drive' : 'Open with Google Drive Player'}
+          </button>
+        ) : lesson.webViewLink ? (
+          <a href={lesson.webViewLink} target="_blank" rel="noreferrer" className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-[#0b57d0] hover:underline dark:text-[#a8c7fa]">
+            <ExternalLink className="h-3.5 w-3.5" />{vi ? 'Mở trực tiếp trên Google Drive' : 'Open in Google Drive'}
+          </a>
+        ) : null}
+      </div>
+    )
   }
   if (src && lesson.mimeType.startsWith('audio/')) {
     return (

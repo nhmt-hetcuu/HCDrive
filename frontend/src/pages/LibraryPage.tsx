@@ -25,6 +25,7 @@ import {
   Pencil,
   PlayCircle,
   Plus,
+  RefreshCw,
   Share2,
   SkipForward,
   Trash2,
@@ -1238,6 +1239,11 @@ export function FolderFilePreviewModal({
   onNavigate: (file: Lesson) => void
 }) {
   if (!file) return null
+  const [useGooglePreview, setUseGooglePreview] = useState(false)
+  useEffect(() => {
+    setUseGooglePreview(false)
+  }, [file.id])
+
   const currentIndex = files.findIndex((f) => f.id === file.id)
   const prevFile = currentIndex > 0 ? files[currentIndex - 1] : null
   const nextFile = currentIndex >= 0 && currentIndex < files.length - 1 ? files[currentIndex + 1] : null
@@ -1262,6 +1268,17 @@ export function FolderFilePreviewModal({
             </div>
           </div>
           <div className="flex items-center gap-1.5">
+            {file.previewUrl && file.mimeType.startsWith('video/') && (
+              <button
+                type="button"
+                onClick={() => setUseGooglePreview(!useGooglePreview)}
+                className="inline-flex h-8 items-center gap-1.5 rounded-full border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 shadow-xs hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 cursor-pointer"
+                title={useGooglePreview ? (vi ? 'Chuyển sang Trình phát HCDrive' : 'Switch to HCDrive Player') : (vi ? 'Chuyển sang Trình phát Google Drive' : 'Switch to Google Drive Player')}
+              >
+                <RefreshCw className="h-3.5 w-3.5 text-[#0b57d0] dark:text-[#a8c7fa]" />
+                <span className="hidden sm:inline">{useGooglePreview ? 'HCDrive Player' : 'Google Player'}</span>
+              </button>
+            )}
             {allowDownload && file.streamUrl ? (
               <a
                 href={lessonDownloadUrl(file.streamUrl, file.name)}
@@ -1317,8 +1334,24 @@ export function FolderFilePreviewModal({
           ) : null}
 
           <div className="flex h-full w-full items-center justify-center overflow-auto">
-            {src && file.mimeType.startsWith('video/') ? (
-              <video controls autoPlay src={src} className="max-h-[75vh] w-full rounded-xl bg-black" />
+            {src && file.mimeType.startsWith('video/') && !useGooglePreview ? (
+              <video
+                controls
+                autoPlay
+                src={src}
+                onError={() => {
+                  if (file.previewUrl) setUseGooglePreview(true)
+                }}
+                className="max-h-[75vh] w-full rounded-xl bg-black shadow-md"
+              />
+            ) : file.mimeType.startsWith('video/') && file.previewUrl ? (
+              <iframe
+                src={file.previewUrl}
+                title={file.name}
+                allow="autoplay; fullscreen"
+                allowFullScreen
+                className="h-full w-full rounded-xl border border-slate-200 bg-black shadow-md dark:border-slate-800"
+              />
             ) : src && file.mimeType.startsWith('audio/') ? (
               <audio controls autoPlay src={src} className="w-full max-w-xl" />
             ) : src && file.mimeType.startsWith('image/') ? (
@@ -1346,6 +1379,8 @@ export function FolderFilePreviewModal({
 }
 
 function LessonPlayer({ lesson, vi, onPosition, onEnded }: { lesson: Lesson; vi: boolean; onPosition: (seconds: number) => void; onEnded: () => void }) {
+  const [playerMode, setPlayerMode] = useState<'hcdrive' | 'google'>('hcdrive')
+  const [videoError, setVideoError] = useState(false)
   const lastSaved = useRef(lesson.positionSeconds)
   const mediaRef = useRef<HTMLVideoElement | HTMLAudioElement | null>(null)
   const onPositionRef = useRef(onPosition)
@@ -1358,10 +1393,19 @@ function LessonPlayer({ lesson, vi, onPosition, onEnded }: { lesson: Lesson; vi:
     if (time > 0 && Math.abs(time - lastSaved.current) >= 2) onPositionRef.current(time)
   }, [])
 
+  useEffect(() => {
+    setPlayerMode('hcdrive')
+    setVideoError(false)
+  }, [lesson.id])
+
   const mediaProps = {
     controls: true,
     autoPlay: true,
     src: src ?? undefined,
+    onError: () => {
+      setVideoError(true)
+      if (lesson.previewUrl) setPlayerMode('google')
+    },
     onLoadedMetadata: (event: SyntheticEvent<HTMLMediaElement>) => {
       const media = event.currentTarget
       if (lesson.positionSeconds > 5 && lesson.positionSeconds < media.duration - 10) media.currentTime = lesson.positionSeconds
@@ -1385,8 +1429,82 @@ function LessonPlayer({ lesson, vi, onPosition, onEnded }: { lesson: Lesson; vi:
     },
   }
 
-  if (src && lesson.mimeType.startsWith('video/')) {
-    return <video ref={(node) => { mediaRef.current = node }} {...mediaProps} className="aspect-video w-full rounded-xl bg-black" />
+  if (lesson.mimeType.startsWith('video/')) {
+    if (playerMode === 'google' || (!src && lesson.previewUrl)) {
+      return (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-2 px-1 text-xs text-slate-500 dark:text-slate-400">
+            <span className="flex items-center gap-1.5 font-medium">
+              <span className="inline-block h-2 w-2 rounded-full bg-amber-500" />
+              {vi ? 'Trình phát Google Drive (Bypass quyền khóa)' : 'Google Drive Player (Bypass restrictions)'}
+            </span>
+            {src && (
+              <button
+                type="button"
+                onClick={() => { setVideoError(false); setPlayerMode('hcdrive') }}
+                className="flex items-center gap-1 rounded-md px-2 py-1 font-medium text-[#0b57d0] hover:bg-blue-50 dark:text-[#a8c7fa] dark:hover:bg-blue-950/40 transition cursor-pointer"
+              >
+                <RefreshCw className="h-3 w-3" />
+                {vi ? 'Dùng Trình phát HCDrive' : 'Use HCDrive Player'}
+              </button>
+            )}
+          </div>
+          <iframe
+            src={lesson.previewUrl || undefined}
+            title={lesson.name}
+            allow="autoplay; fullscreen"
+            allowFullScreen
+            className="aspect-video w-full rounded-xl border border-slate-200 bg-black shadow-md dark:border-slate-800"
+          />
+        </div>
+      )
+    }
+
+    if (src && !videoError) {
+      return (
+        <div className="space-y-2">
+          {lesson.previewUrl && (
+            <div className="flex items-center justify-between gap-2 px-1 text-xs text-slate-500 dark:text-slate-400">
+              <span className="flex items-center gap-1.5 font-medium">
+                <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
+                {vi ? 'Trình phát HCDrive' : 'HCDrive Player'}
+              </span>
+              <button
+                type="button"
+                onClick={() => setPlayerMode('google')}
+                className="flex items-center gap-1 rounded-md px-2 py-1 font-medium text-[#0b57d0] hover:bg-blue-50 dark:text-[#a8c7fa] dark:hover:bg-blue-950/40 transition cursor-pointer"
+                title={vi ? 'Chuyển sang Trình phát Google Drive nếu video bị khóa tải' : 'Switch to Google Drive Player if download is locked'}
+              >
+                <RefreshCw className="h-3 w-3" />
+                {vi ? 'Đổi sang Trình phát Google' : 'Switch to Google Player'}
+              </button>
+            </div>
+          )}
+          <video ref={(node) => { mediaRef.current = node }} {...mediaProps} className="aspect-video w-full rounded-xl bg-black shadow-md" />
+        </div>
+      )
+    }
+
+    // Video error with fallback
+    return (
+      <div className="rounded-xl border border-slate-200 p-6 text-center text-sm text-slate-600 dark:border-slate-800 dark:text-slate-300">
+        <p>{vi ? 'Không thể phát video bằng trình phát trực tiếp (quyền Google Drive bị khóa).' : 'Cannot stream video directly (Google Drive permission locked).'}</p>
+        {lesson.previewUrl ? (
+          <button
+            type="button"
+            onClick={() => { setVideoError(false); setPlayerMode('google') }}
+            className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-[#0b57d0] px-4 py-2 text-xs font-medium text-white hover:bg-[#0b57d0]/90 transition cursor-pointer"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            {vi ? 'Mở bằng Trình phát Google Drive' : 'Open with Google Drive Player'}
+          </button>
+        ) : lesson.webViewLink ? (
+          <a href={lesson.webViewLink} target="_blank" rel="noreferrer" className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-[#0b57d0] hover:underline dark:text-[#a8c7fa]">
+            <ExternalLink className="h-3.5 w-3.5" />{vi ? 'Mở trực tiếp trên Google Drive' : 'Open in Google Drive'}
+          </a>
+        ) : null}
+      </div>
+    )
   }
   if (src && lesson.mimeType.startsWith('audio/')) {
     return <audio ref={(node) => { mediaRef.current = node }} {...mediaProps} className="w-full" />

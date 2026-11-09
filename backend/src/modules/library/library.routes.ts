@@ -9,7 +9,7 @@ import { optionalAuth, requireAuth, type AuthRequest } from '../../middleware/au
 import { verifyAccessToken } from '../../utils/jwt.js'
 import { ownedBy, requireOwned, type OwnedRequest } from '../../middleware/ownership.js'
 import { ensureGoogleAppFolder, getAuthedGoogleClient, getGoogleDriveClient, syncGoogleAppFolderFiles } from '../google/google.service.js'
-import { googleDownloadExportMimeTypes, normalizeHeaders, withExtension } from '../files/stream-google-file.js'
+import { googleDownloadExportMimeTypes, normalizeHeaders, withExtension, attemptGoogleBypassStream, resourceKeyHeaders } from '../files/stream-google-file.js'
 import { ZipArchive } from 'archiver'
 import { getAccountProxyUrl, getUndiciDispatcher } from '../../utils/proxy.js'
 import { noteGoogleError } from '../../utils/google-backoff.js'
@@ -46,11 +46,6 @@ export function parseDriveLink(input: string): { fileId: string; resourceKey: st
   const fileId = fromPath?.[1] ?? url.searchParams.get('id')
   if (!fileId || !DRIVE_ID.test(fileId)) return null
   return { fileId, resourceKey: url.searchParams.get('resourcekey') }
-}
-
-/** Links shared before 2021 need their resource key sent along, or Drive answers 404. */
-function resourceKeyHeaders(fileId: string, resourceKey: string | null | undefined): Record<string, string> {
-  return resourceKey ? { 'X-Goog-Drive-Resource-Keys': `${fileId}/${resourceKey}` } : {}
 }
 
 function driveFor(account: ConnectedAccount) {
@@ -111,102 +106,6 @@ export function getLinkShareMeta(link: SavedLink): ShareMeta | null {
   try {
     const raw = decryptText(link.shareTokenEncrypted)
     return parseShareMeta(raw)
-  } catch {
-    return null
-  }
-}
-
-/** Attempts to bypass Google Drive download restrictions by fetching stream from preview player / videoplayback / export */
-async function attemptGoogleBypassStream(account: ConnectedAccount, fileId: string, resourceKey: string | null, range?: string): Promise<globalThis.Response | null> {
-  try {
-    const auth = await getAuthedGoogleClient(account)
-    const authHeaders = normalizeHeaders(await auth.getRequestHeaders())
-    const dispatcher = getUndiciDispatcher(getAccountProxyUrl(account))
-    const rkHeaders = resourceKeyHeaders(fileId, resourceKey)
-
-    // Method 1: Check Google Drive preview page for videoplayback / stream URLs
-    const previewUrl = `https://drive.google.com/file/d/${fileId}/preview${resourceKey ? `?resourcekey=${resourceKey}` : ''}`
-    const previewRes = await fetch(previewUrl, {
-      dispatcher,
-      headers: {
-        ...authHeaders,
-        ...rkHeaders,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      },
-    } as any)
-
-    if (previewRes.ok) {
-      const html = await previewRes.text().catch(() => '')
-      // 1. Matches direct videoplayback URL
-      const streamMatch = html.match(/(https?:\\\/\\\/[^\s"']+(?:googlevideo\.com|drive\.google\.com)\\\/videoplayback[^\s"']*)/i)
-        || html.match(/(https?:\/\/[^\s"']+(?:googlevideo\.com|drive\.google\.com)\/videoplayback[^\s"']*)/i)
-
-      if (streamMatch?.[1]) {
-        const streamUrl = streamMatch[1].replace(/\\u0026/g, '&').replace(/\\\//g, '/')
-        const videoRes = await fetch(streamUrl, {
-          dispatcher,
-          headers: {
-            ...authHeaders,
-            ...(range ? { Range: range } : {}),
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          },
-        } as any)
-        if (videoRes.ok) return videoRes
-      }
-
-      // 2. Check for fmt_stream_map in script tags
-      const fmtMatch = html.match(/"url_encoded_fmt_stream_map"\s*:\s*"([^"]+)"/) || html.match(/"fmt_stream_map"\s*:\s*"([^"]+)"/)
-      if (fmtMatch?.[1]) {
-        const rawMap = fmtMatch[1].replace(/\\u0026/g, '&')
-        const urls = rawMap.split(',').map((part) => {
-          const urlParam = part.split('&').find((p) => p.startsWith('url='))
-          return urlParam ? decodeURIComponent(urlParam.slice(4)) : null
-        }).filter(Boolean) as string[]
-        if (urls.length > 0) {
-          const fmtRes = await fetch(urls[0], {
-            dispatcher,
-            headers: {
-              ...(range ? { Range: range } : {}),
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            },
-          } as any)
-          if (fmtRes.ok) return fmtRes
-        }
-      }
-    }
-
-    // Method 2: Try uc?export=download&confirm=t
-    const ucUrl = `https://drive.google.com/uc?id=${fileId}&export=download&confirm=t${resourceKey ? `&resourcekey=${resourceKey}` : ''}`
-    const ucRes = await fetch(ucUrl, {
-      dispatcher,
-      headers: {
-        ...authHeaders,
-        ...rkHeaders,
-        ...(range ? { Range: range } : {}),
-      },
-      redirect: 'follow',
-    } as any)
-    if (ucRes.ok) {
-      const contentType = ucRes.headers.get('content-type') ?? ''
-      if (!contentType.includes('text/html') || ucRes.headers.get('content-disposition')?.includes('attachment')) {
-        return ucRes
-      }
-    }
-
-    // Method 3: Try Google Docs export for docs/sheets/slides
-    const drive = await driveFor(account)
-    const meta = await drive.files.get({ fileId, fields: 'mimeType,name', supportsAllDrives: true }, { headers: rkHeaders }).catch(() => null)
-    if (meta?.data.mimeType && googleDownloadExportMimeTypes[meta.data.mimeType]) {
-      const target = googleDownloadExportMimeTypes[meta.data.mimeType]
-      const expRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=${encodeURIComponent(target.mimeType)}`, {
-        dispatcher,
-        headers: { ...authHeaders, ...rkHeaders },
-      } as any)
-      if (expRes.ok) return expRes
-    }
-
-    return null
   } catch {
     return null
   }
@@ -330,6 +229,14 @@ libraryRouter.get('/stream/:token', async (req, res, next) => {
         noteGoogleError(account.id, { status: response.status, message: text })
         return res.status(response.status === 401 ? 502 : response.status).json({ code: 'GOOGLE_FILE_STREAM_FAILED', message: text || response.statusText })
       }
+    }
+
+    const contentType = response.headers.get('content-type') ?? ''
+    if (contentType.includes('text/html') && !response.headers.get('content-disposition')?.includes('attachment')) {
+      return res.status(403).json({
+        code: 'GOOGLE_STREAM_RESTRICTED',
+        message: 'Google Drive giới hạn quyền stream/tải tệp này. Vui lòng mở bằng Trình phát Google Drive.',
+      })
     }
 
     res.status(response.status)
