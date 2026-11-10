@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   ArrowLeft,
@@ -23,11 +23,13 @@ import {
 import { apiFetch, API_URL, formatBytes } from '@/lib/api'
 import { useLanguage } from '@/context/LanguageContext'
 import { useSnackbar } from '@/context/SnackbarContext'
+import { useDownload } from '@/context/DownloadContext'
 import { getFileVisual } from '@/components/drive/DriveGridView'
 import { DummyModal } from '@/components/drive/DummyModal'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { lessonDownloadUrl, startSharedCourseDownload } from '@/components/drive/LibraryDialogs'
+import { StreamProgressBar } from '@/components/StreamProgressBar'
 import { FolderFilePreviewModal } from '@/pages/LibraryPage'
 
 type SharedCourseInfo = {
@@ -87,6 +89,7 @@ export function SharedCoursePage() {
   const vi = lang === 'vi'
   const navigate = useNavigate()
   const { showSnackbar } = useSnackbar()
+  const { startDownload } = useDownload()
 
   const [data, setData] = useState<SharedCourseInfo | null>(null)
   const [error, setError] = useState('')
@@ -169,7 +172,7 @@ export function SharedCoursePage() {
     if (!data?.course.allowDownload) return
     setDownloadingZip(true)
     const target = path.length > 1 ? { folderId: folder.id ?? undefined, rk: folder.rk ?? undefined, name: folder.name } : undefined
-    startSharedCourseDownload(token, target)
+    startSharedCourseDownload(token, target, startDownload)
       .then(() => showSnackbar(vi ? 'Đang chuẩn bị tải xuống file ZIP…' : 'Preparing ZIP download…'))
       .catch((err) => showSnackbar(errorText(err, vi ? 'Không tải được file ZIP' : 'Could not download ZIP')))
       .finally(() => setDownloadingZip(false))
@@ -337,7 +340,12 @@ export function SharedCoursePage() {
           <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-4 sm:p-6">
             {current ? (
               <div className="mx-auto w-full max-w-4xl space-y-4">
-                <SharedLessonPlayer key={current.id} lesson={current} vi={vi} />
+                <SharedLessonPlayer
+                  key={current.id}
+                  lesson={current}
+                  vi={vi}
+                  accountEmail={data.access.accountEmail ?? data.accountEmails?.[0] ?? undefined}
+                />
 
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/80 pb-4 dark:border-slate-800">
                   <div className="min-w-0 flex-1">
@@ -350,15 +358,27 @@ export function SharedCoursePage() {
                   </div>
 
                   <div className="flex items-center gap-2">
-                    {course.allowDownload && current.streamUrl ? (
-                      <a
-                        href={lessonDownloadUrl(current.streamUrl, current.name)}
-                        className="inline-flex h-8.5 items-center gap-1.5 rounded-full border border-slate-300 bg-white px-3.5 text-xs font-medium text-slate-700 shadow-xs hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+                    {course.allowDownload && current.canDownload && current.streamUrl ? (
+                      <button
+                        type="button"
+                        onClick={() => startDownload(lessonDownloadUrl(current.streamUrl!, current.name), current.name, { auth: false })}
+                        className="inline-flex h-8.5 items-center gap-1.5 rounded-full border border-slate-300 bg-white px-3.5 text-xs font-medium text-slate-700 shadow-xs hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 cursor-pointer"
                       >
                         <Download className="h-3.5 w-3.5 text-[#0b57d0] dark:text-[#a8c7fa]" />
                         <span>{vi ? 'Tải bài này' : 'Download lesson'}</span>
-                      </a>
+                      </button>
                     ) : null}
+
+                    <a
+                      href={current.webViewLink ? (data.access.accountEmail ? `${current.webViewLink}${current.webViewLink.includes('?') ? '&' : '?'}authuser=${encodeURIComponent(data.access.accountEmail)}` : current.webViewLink) : `https://drive.google.com/file/d/${current.id}/view${data.access.accountEmail ? `?authuser=${encodeURIComponent(data.access.accountEmail)}` : ''}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex h-8.5 items-center gap-1.5 rounded-full border border-slate-300 bg-white px-3.5 text-xs font-medium text-[#0b57d0] shadow-xs hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-[#a8c7fa] dark:hover:bg-slate-700 cursor-pointer"
+                      title={vi ? 'Mở bài học này trong tab mới trên Google Drive' : 'Open this lesson in a new tab on Google Drive'}
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                      <span>{vi ? 'Xem trên Google Drive' : 'Drive'}</span>
+                    </a>
 
                     {nextLesson ? (
                       <Button size="sm" onClick={() => setCurrent(nextLesson)} className="gap-1.5">
@@ -632,14 +652,17 @@ export function SharedCoursePage() {
                                   <Icon className={cn('h-10 w-10', visual.color)} />
                                 )}
                                 {course.allowDownload && fileItem.streamUrl ? (
-                                  <a
-                                    href={lessonDownloadUrl(fileItem.streamUrl, fileItem.name)}
-                                    onClick={(e) => e.stopPropagation()}
-                                    className="absolute right-2 top-2 rounded-full bg-white/90 p-1.5 text-slate-600 shadow-sm opacity-0 group-hover:opacity-100 hover:bg-white hover:text-[#0b57d0] dark:bg-[#1e1f20]/90 dark:text-slate-300 dark:hover:bg-[#282a2c] transition"
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      startDownload(lessonDownloadUrl(fileItem.streamUrl!, fileItem.name), fileItem.name, { auth: false })
+                                    }}
+                                    className="absolute right-2 top-2 rounded-full bg-white/90 p-1.5 text-slate-600 shadow-sm opacity-0 group-hover:opacity-100 hover:bg-white hover:text-[#0b57d0] dark:bg-[#1e1f20]/90 dark:text-slate-300 dark:hover:bg-[#282a2c] transition cursor-pointer"
                                     title={vi ? 'Tải tệp này' : 'Download file'}
                                   >
                                     <Download className="h-3.5 w-3.5" />
-                                  </a>
+                                  </button>
                                 ) : null}
                               </div>
                               <div className="flex items-center gap-2 border-t border-slate-100 p-2.5 dark:border-slate-800/80">
@@ -725,14 +748,17 @@ export function SharedCoursePage() {
                                     <Eye className="h-4 w-4" />
                                   </button>
                                   {course.allowDownload && item.streamUrl ? (
-                                    <a
-                                      href={lessonDownloadUrl(item.streamUrl, item.name)}
-                                      onClick={(e) => e.stopPropagation()}
-                                      className="p-1 rounded-full text-slate-400 hover:text-[#0b57d0] hover:bg-slate-100 dark:hover:bg-[#282a2c]"
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        startDownload(lessonDownloadUrl(item.streamUrl!, item.name), item.name, { auth: false })
+                                      }}
+                                      className="p-1 rounded-full text-slate-400 hover:text-[#0b57d0] hover:bg-slate-100 dark:hover:bg-[#282a2c] cursor-pointer"
                                       title={vi ? 'Tải tệp' : 'Download'}
                                     >
                                       <Download className="h-4 w-4" />
-                                    </a>
+                                    </button>
                                   ) : null}
                                 </>
                               )}
@@ -838,11 +864,35 @@ export function SharedCoursePage() {
   )
 }
 
-function SharedLessonPlayer({ lesson, vi }: { lesson: Lesson; vi: boolean }) {
+function SharedLessonPlayer({ lesson, vi, accountEmail }: { lesson: Lesson; vi: boolean; accountEmail?: string }) {
   const [playerMode, setPlayerMode] = useState<'hcdrive' | 'google'>('hcdrive')
   const [videoError, setVideoError] = useState(false)
   const mediaRef = useRef<HTMLVideoElement | HTMLAudioElement | null>(null)
   const src = lesson.streamUrl ? `${API_URL}${lesson.streamUrl}` : null
+
+  const authedViewUrl = useMemo(() => {
+    const base = lesson.webViewLink || `https://drive.google.com/file/d/${lesson.id}/view`
+    if (!accountEmail) return base
+    try {
+      const url = new URL(base)
+      url.searchParams.set('authuser', accountEmail)
+      return url.toString()
+    } catch {
+      return `${base}${base.includes('?') ? '&' : '?'}authuser=${encodeURIComponent(accountEmail)}`
+    }
+  }, [lesson.webViewLink, lesson.id, accountEmail])
+
+  const authedPreviewUrl = useMemo(() => {
+    const base = lesson.previewUrl || `https://drive.google.com/file/d/${lesson.id}/preview`
+    if (!accountEmail) return base
+    try {
+      const url = new URL(base)
+      url.searchParams.set('authuser', accountEmail)
+      return url.toString()
+    } catch {
+      return `${base}${base.includes('?') ? '&' : '?'}authuser=${encodeURIComponent(accountEmail)}`
+    }
+  }, [lesson.previewUrl, lesson.id, accountEmail])
 
   useEffect(() => {
     setPlayerMode('hcdrive')
@@ -868,24 +918,36 @@ function SharedLessonPlayer({ lesson, vi }: { lesson: Lesson; vi: boolean }) {
     if (playerMode === 'google' || (!src && lesson.previewUrl)) {
       return (
         <div className="space-y-2">
-          <div className="flex items-center justify-between gap-2 px-1 text-xs text-slate-500 dark:text-slate-400">
+          <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-slate-500 dark:text-slate-400">
             <span className="flex items-center gap-1.5 font-medium">
               <span className="inline-block h-2 w-2 rounded-full bg-amber-500" />
-              {vi ? 'Trình phát Google Drive (Yêu cầu tài khoản có quyền)' : 'Google Drive Player (Requires authorized account)'}
+              {vi ? 'Khung nhúng Google Drive' : 'Google Drive Embedded Player'}
             </span>
-            {src && (
-              <button
-                type="button"
-                onClick={() => { setVideoError(false); setPlayerMode('hcdrive') }}
-                className="flex items-center gap-1 rounded-md px-2 py-1 font-medium text-[#0b57d0] hover:bg-blue-50 dark:text-[#a8c7fa] dark:hover:bg-blue-950/40 transition cursor-pointer"
+            <div className="flex items-center gap-2">
+              <a
+                href={authedViewUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center gap-1 rounded-md px-2 py-1 font-semibold text-[#0b57d0] hover:bg-blue-50 dark:text-[#a8c7fa] dark:hover:bg-blue-950/40 transition cursor-pointer"
+                title={vi ? 'Mở trong tab mới nếu khung nhúng bị chặn quyền hoặc yêu cầu đăng nhập' : 'Open in new tab if embed is blocked or asks to sign in'}
               >
-                <RefreshCw className="h-3 w-3" />
-                {vi ? 'Dùng Trình phát HCDrive (Server Cache)' : 'Use HCDrive Player (Server Cache)'}
-              </button>
-            )}
+                <ExternalLink className="h-3.5 w-3.5" />
+                {vi ? 'Mở tab mới trên Google Drive' : 'Open in new tab on Drive'}
+              </a>
+              {src && (
+                <button
+                  type="button"
+                  onClick={() => { setVideoError(false); setPlayerMode('hcdrive') }}
+                  className="flex items-center gap-1 rounded-md px-2 py-1 font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800 transition cursor-pointer"
+                >
+                  <RefreshCw className="h-3 w-3" />
+                  {vi ? 'Dùng Trình phát HCDrive' : 'Use HCDrive Player'}
+                </button>
+              )}
+            </div>
           </div>
           <iframe
-            src={lesson.previewUrl || undefined}
+            src={authedPreviewUrl || undefined}
             title={lesson.name}
             allow="autoplay; fullscreen"
             allowFullScreen
@@ -898,17 +960,27 @@ function SharedLessonPlayer({ lesson, vi }: { lesson: Lesson; vi: boolean }) {
     if (src && !videoError) {
       return (
         <div className="space-y-2">
-          {lesson.previewUrl && (
-            <div className="flex items-center justify-between gap-2 px-1 text-xs text-slate-500 dark:text-slate-400">
-              <span className="flex items-center gap-1.5 font-medium">
-                <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
-                {vi ? 'Trình phát HCDrive (Bypass & Cache 30 phút)' : 'HCDrive Player (Bypass & 30-min Cache)'}
-                {isBuffering && (
-                  <span className="text-[11px] text-amber-500 animate-pulse">
-                    ({vi ? 'Đang chuẩn bị stream...' : 'Buffering stream...'})
-                  </span>
-                )}
-              </span>
+          <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-slate-500 dark:text-slate-400">
+            <span className="flex items-center gap-1.5 font-medium">
+              <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
+              {vi ? 'Trình phát HCDrive' : 'HCDrive Player'}
+              {isBuffering && (
+                <span className="text-[11px] text-amber-500 animate-pulse">
+                  ({vi ? 'Đang chuẩn bị stream...' : 'Buffering stream...'})
+                </span>
+              )}
+            </span>
+            <div className="flex items-center gap-2">
+              <a
+                href={authedViewUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center gap-1 rounded-md px-2 py-1 font-medium text-[#0b57d0] hover:bg-blue-50 dark:text-[#a8c7fa] dark:hover:bg-blue-950/40 transition cursor-pointer"
+                title={vi ? 'Mở trực tiếp trên Google Drive' : 'Open directly on Google Drive'}
+              >
+                <ExternalLink className="h-3 w-3" />
+                {vi ? 'Xem trên Google Drive' : 'Watch on Google Drive'}
+              </a>
               <button
                 type="button"
                 onClick={() => setPlayerMode('google')}
@@ -919,46 +991,66 @@ function SharedLessonPlayer({ lesson, vi }: { lesson: Lesson; vi: boolean }) {
                 {vi ? 'Đổi sang Trình phát Google' : 'Switch to Google Player'}
               </button>
             </div>
-          )}
+          </div>
           <video ref={(node) => { mediaRef.current = node }} {...mediaProps} className="aspect-video w-full rounded-2xl bg-black shadow-md" />
+          <StreamProgressBar streamUrl={lesson.streamUrl} isBuffering={isBuffering} vi={vi} />
         </div>
       )
     }
 
     // Video error with fallback
     return (
-      <div className="rounded-2xl border border-slate-200 p-8 text-center text-sm text-slate-600 dark:border-slate-800 dark:text-slate-300">
-        <p className="font-medium text-slate-800 dark:text-slate-200">
-          {vi ? 'Không thể phát video ngay hoặc video đang được máy chủ tải vào bộ đệm cache.' : 'Unable to stream video or file is being cached on server.'}
+      <div className="rounded-2xl border border-amber-200 bg-amber-50/50 p-6 sm:p-8 text-center text-sm text-slate-700 dark:border-amber-900/40 dark:bg-amber-950/20 dark:text-slate-200">
+        <StreamProgressBar streamUrl={lesson.streamUrl} isBuffering={false} vi={vi} className="mb-4" />
+        <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-amber-100 text-amber-600 dark:bg-amber-900/50 dark:text-amber-400">
+          <ExternalLink className="h-6 w-6" />
+        </div>
+        <p className="font-semibold text-slate-900 dark:text-slate-100">
+          {vi ? 'Video được bảo vệ quyền xem riêng tư trên Google Drive' : 'Video Protected with View-only Rights on Google Drive'}
         </p>
-        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-          {vi ? 'Máy chủ HCDrive đang tải tệp về server và lưu trữ 30 phút để phát mượt mà không giới hạn quyền.' : 'HCDrive server is caching the file for 30 minutes to enable smooth unrestricted playback.'}
+        <p className="mt-1.5 max-w-lg mx-auto text-xs text-slate-600 dark:text-slate-300">
+          {vi
+            ? 'Chủ sở hữu khóa học đã khóa quyền tải xuống & sao chép đối với người xem. Trình duyệt cũng chặn cookie đăng nhập Google trong khung nhúng (iframe) nên không thể phát video trực tiếp tại đây.'
+            : 'The course owner has disabled download and copy permissions. Web browsers also block Google authentication cookies in embedded iframes.'}
         </p>
-        <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+        <p className="mt-1 text-xs font-medium text-[#0b57d0] dark:text-[#a8c7fa]">
+          {accountEmail
+            ? (vi ? `Tài khoản Google có quyền xem: ${accountEmail}` : `Authorized Google account: ${accountEmail}`)
+            : (vi ? 'Vui lòng mở bằng tài khoản Google đã được cấp quyền truy cập.' : 'Please open with the authorized Google account.')}
+        </p>
+
+        <div className="mt-5 flex flex-wrap items-center justify-center gap-2.5">
+          <a
+            href={authedViewUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-2 rounded-xl bg-[#0b57d0] px-5 py-2.5 text-xs font-semibold text-white shadow-sm hover:bg-[#0b57d0]/90 transition cursor-pointer"
+          >
+            <ExternalLink className="h-4 w-4" />
+            {vi ? 'Mở xem trực tiếp trên Google Drive' : 'Open & Watch on Google Drive'}
+          </a>
+
+          <button
+            type="button"
+            onClick={() => { setVideoError(false); setPlayerMode('google') }}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-xs font-medium text-slate-700 shadow-xs hover:bg-slate-50 dark:border-slate-700 dark:bg-[#1e1f20] dark:text-slate-300 dark:hover:bg-slate-800 transition cursor-pointer"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            {vi ? 'Xem thử trong khung nhúng (iFrame)' : 'Try embedded Google iFrame'}
+          </button>
+
           <button
             type="button"
             onClick={() => {
               setVideoError(false)
               setPlayerMode('hcdrive')
-              if (mediaRef.current) {
-                mediaRef.current.load()
-              }
+              if (mediaRef.current) mediaRef.current.load()
             }}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-[#0b57d0] px-4 py-2 text-xs font-medium text-white hover:bg-[#0b57d0]/90 transition cursor-pointer"
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-[#1e1f20] dark:text-slate-300 cursor-pointer"
           >
             <RefreshCw className="h-3.5 w-3.5" />
             {vi ? 'Thử lại phát HCDrive' : 'Retry HCDrive Stream'}
           </button>
-          {lesson.previewUrl && (
-            <button
-              type="button"
-              onClick={() => { setVideoError(false); setPlayerMode('google') }}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 transition cursor-pointer"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-              {vi ? 'Thử Trình phát Google Drive' : 'Try Google Drive Player'}
-            </button>
-          )}
         </div>
       </div>
     )

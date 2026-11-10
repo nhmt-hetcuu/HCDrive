@@ -18,7 +18,7 @@ import { signId, verifySignedId } from '../../utils/signed-url.js'
 import { decryptText, encryptText, hashToken, randomToken } from '../../utils/crypto.js'
 import { isGoogleRateLimit } from '../../utils/google-backoff.js'
 import { mapLimit } from '../../utils/concurrency.js'
-import { streamCachedOrFetch, readCacheMeta, touchCache, getCacheDataPath } from '../../services/temp-cache.service.js'
+import { streamCachedOrFetch, readCacheMeta, touchCache, getCacheDataPath, getCacheProgress } from '../../services/temp-cache.service.js'
 
 // Library of Drive links other people shared with the user (bought courses, lesson folders, documents).
 // HCDrive opens them through the user's own Google account that received the share, so it can only
@@ -222,20 +222,25 @@ libraryRouter.get('/stream/:token', async (req, res, next) => {
       downloadName || 'file',
       range,
       res,
-      async () => {
+      async (rangeForFetch?: string) => {
         const auth = await getAuthedGoogleClient(account)
         const headers = normalizeHeaders(await auth.getRequestHeaders())
         const dispatcher = getUndiciDispatcher(getAccountProxyUrl(account))
         const rkHeaders = resourceKeyHeaders(fileId, resourceKey)
+        const fetchHeaders: Record<string, string> = {
+          ...headers,
+          ...rkHeaders,
+          ...(rangeForFetch ? { Range: rangeForFetch } : {}),
+        }
         let response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&supportsAllDrives=true`, {
           dispatcher,
-          headers: { ...headers, ...rkHeaders },
+          headers: fetchHeaders,
         } as any)
 
         if (!response.ok) {
           // Attempt bypass for blocked Google Drive download
-          const bypass = await attemptGoogleBypassStream(account, fileId, resourceKey)
-          if (bypass && bypass.ok) {
+          const bypass = await attemptGoogleBypassStream(account, fileId, resourceKey, rangeForFetch)
+          if (bypass && (bypass.status === 200 || bypass.status === 206)) {
             response = bypass
           } else {
             const text = await response.text().catch(() => '')
@@ -257,6 +262,8 @@ libraryRouter.get('/stream/:token', async (req, res, next) => {
           stream: response.body,
           contentType: contentType || 'application/octet-stream',
           sizeBytes,
+          contentRange: response.headers.get('content-range') || undefined,
+          status: response.status,
         }
       },
       {
@@ -271,6 +278,21 @@ libraryRouter.get('/stream/:token', async (req, res, next) => {
         message: 'Google Drive giới hạn quyền stream/tải tệp này hoặc không thể kết nối tới Google Drive.',
       })
     }
+  } catch (error) {
+    return next(error)
+  }
+})
+
+// Progress endpoint for stream/caching of a signed library item
+libraryRouter.get('/stream-progress/:token', async (req, res, next) => {
+  try {
+    const signed = verifySignedId('library', String(req.params.token))
+    const [_linkId, fileId] = signed?.split('~') ?? []
+    if (!fileId || !DRIVE_ID.test(fileId)) {
+      return res.status(404).json({ code: 'NOT_FOUND', message: 'Not found.' })
+    }
+    const progress = getCacheProgress(fileId)
+    return res.json(progress)
   } catch (error) {
     return next(error)
   }
@@ -551,8 +573,8 @@ libraryRouter.get('/shared/:token/items', async (req, res, next) => {
         const resourceKey = file.shortcutDetails ? file.shortcutDetails.targetResourceKey ?? null : file.resourceKey ?? null
         const isFolder = mimeType === FOLDER_MIME
         const isGoogleDoc = mimeType.startsWith('application/vnd.google-apps.')
-        // canDownload reflects owner's share configuration (allowDownload)
-        const canDownload = allowDownload
+        // canDownload reflects owner's share configuration (allowDownload) and Google Drive capabilities
+        const canDownload = allowDownload && (file.capabilities?.canDownload !== false)
         return {
           id,
           name: file.name!,
@@ -562,7 +584,7 @@ libraryRouter.get('/shared/:token/items', async (req, res, next) => {
           durationSeconds: file.videoMediaMetadata?.durationMillis ? Math.round(Number(file.videoMediaMetadata.durationMillis) / 1000) : null,
           canDownload,
           resourceKey,
-          webViewLink: file.webViewLink ?? null,
+          webViewLink: file.webViewLink ?? (id ? `https://drive.google.com/file/d/${id}/view` : null),
           previewUrl: isFolder ? null : previewUrl(id, resourceKey),
           streamUrl: !isFolder && !isGoogleDoc ? streamPath(link.id, id, resourceKey) : null,
           completed: false,
@@ -913,9 +935,9 @@ libraryRouter.get('/:id/items', loadOwnedLink, async (req: OwnedRequest<SavedLin
           isFolder,
           size: file.size ?? null,
           durationSeconds: file.videoMediaMetadata?.durationMillis ? Math.round(Number(file.videoMediaMetadata.durationMillis) / 1000) : null,
-          canDownload: true,
+          canDownload: file.capabilities?.canDownload !== false,
           resourceKey,
-          webViewLink: file.webViewLink ?? null,
+          webViewLink: file.webViewLink ?? (id ? `https://drive.google.com/file/d/${id}/view` : null),
           previewUrl: isFolder ? null : previewUrl(id, resourceKey),
           streamUrl: !isFolder && !isGoogleDoc ? streamPath(link.id, id, resourceKey) : null,
           completed: Boolean(entry?.completedAt),
@@ -924,7 +946,30 @@ libraryRouter.get('/:id/items', loadOwnedLink, async (req: OwnedRequest<SavedLin
       })
       .sort((a, b) => Number(b.isFolder) - Number(a.isFolder) || naturalName.compare(a.name, b.name))
 
-    return res.json({ items, account: { id: account.id, email: account.email } })
+    return res.json({ items, account: { id: account.id, email: account.email, hasCookie: Boolean(account.cookieEncrypted) } })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+libraryRouter.post('/:id/cookie', requireAuth, async (req: AuthRequest, res, next) => {
+  try {
+    const link = await prisma.savedLink.findFirst({
+      where: { id: String(req.params.id), userId: req.user!.id },
+    })
+    if (!link) return res.status(404).json({ code: 'NOT_FOUND', message: 'Not found.' })
+    const account = await accountForLink(link)
+    if (!account) return noAccess(res)
+
+    const cookie = typeof req.body?.cookie === 'string' ? req.body.cookie.trim() : ''
+    const cookieEncrypted = cookie ? encryptText(cookie) : null
+
+    await prisma.connectedAccount.update({
+      where: { id: account.id },
+      data: { cookieEncrypted },
+    })
+
+    return res.json({ success: true, hasCookie: Boolean(cookieEncrypted) })
   } catch (error) {
     return next(error)
   }

@@ -1,9 +1,9 @@
 import { useEffect, useState, useMemo, useRef, type MouseEvent } from 'react'
 import { Clock } from 'lucide-react'
-import { apiFetch, API_URL } from '@/lib/api'
+import { apiFetch } from '@/lib/api'
 import { useLanguage } from '@/context/LanguageContext'
 import { useSnackbar } from '@/context/SnackbarContext'
-import { getAccessToken } from '@/lib/auth'
+import { useDownload } from '@/context/DownloadContext'
 import { DriveToolbar } from '@/components/drive/DriveToolbar'
 import { DriveListView } from '@/components/drive/DriveListView'
 import { DriveGridView } from '@/components/drive/DriveGridView'
@@ -18,6 +18,7 @@ import type { FileItem } from '@/data/drive-data'
 export function RecentPage() {
   const { lang } = useLanguage()
   const { showSnackbar } = useSnackbar()
+  const { startDownload } = useDownload()
   const vi = lang === 'vi'
 
   const [files, setFiles] = useState<FileItem[]>([])
@@ -213,20 +214,9 @@ export function RecentPage() {
     if (!target) return
     try {
       if (target.id) {
-        const res = await fetch(`${API_URL}/files/${target.id}/download`, {
-          headers: { Authorization: `Bearer ${getAccessToken()}` },
-        })
-        if (res.ok) {
-          const blob = await res.blob()
-          const url = URL.createObjectURL(blob)
-          const a = document.createElement('a')
-          a.href = url
-          a.download = target.name
-          a.click()
-          window.setTimeout(() => URL.revokeObjectURL(url), 1000)
-          showSnackbar(vi ? `Đang tải xuống ${target.name}` : `Downloading ${target.name}`)
-          return
-        }
+        showSnackbar(vi ? `Đang bắt đầu tải ${target.name}...` : `Starting download of ${target.name}...`)
+        await startDownload(`/files/${target.id}/download`, target.name, { auth: true })
+        return
       }
       if (target.providerFileId) {
         window.open(`https://drive.google.com/uc?id=${target.providerFileId}&export=download`, '_blank')

@@ -19,6 +19,7 @@ import { TrashPage } from '@/pages/TrashPage'
 import { ApiDocsPage } from '@/pages/ApiDocsPage'
 import { NotFoundPage } from '@/pages/NotFoundPage'
 import { UploadProvider } from '@/context/UploadContext'
+import { DownloadProvider } from '@/context/DownloadContext'
 import { LanguageProvider } from '@/context/LanguageContext'
 import { SnackbarProvider } from '@/context/SnackbarContext'
 import { DriveFeatureHost } from '@/components/drive/DriveFeatureHost'
@@ -27,8 +28,9 @@ function App() {
   return (
     <LanguageProvider>
       <SnackbarProvider>
-        <UploadProvider>
-          <Routes>
+        <DownloadProvider>
+          <UploadProvider>
+            <Routes>
             <Route path="login" element={<LoginPage />} />
             <Route path="register" element={<RegisterPage />} />
             <Route path="google-auth" element={<GoogleAuthPage />} />
@@ -61,7 +63,8 @@ function App() {
           </Routes>
           {/* Dialogs for Google Drive actions started from any page's file menu. */}
           <DriveFeatureHost />
-        </UploadProvider>
+          </UploadProvider>
+        </DownloadProvider>
       </SnackbarProvider>
     </LanguageProvider>
   )

@@ -277,6 +277,9 @@ async function syncAccountUnlocked(accountId: string, userId: string, force: boo
   const account = await prisma.connectedAccount.findFirstOrThrow({
     where: { id: accountId, provider: 'google_drive', status: 'connected', OR: [{ userId }, { isShared: true }] },
   })
+  if (account.connectedVia === 'cookie') {
+    return { accountId, created: 0, updated: 0, deleted: 0 }
+  }
   // Google said "too many requests" a moment ago: automatic syncs wait (see utils/google-backoff.ts).
   if (!force && googlePausedFor(accountId) > 0) return { accountId, created: 0, updated: 0, deleted: 0 }
   try {
@@ -1115,6 +1118,28 @@ export async function listGoogleDriveRecent(
 
   return { items }
 }
+
+export async function getAccountCookie(account: { id?: string; cookieEncrypted?: string | null }): Promise<string | null> {
+  if (account.cookieEncrypted) {
+    try {
+      const decrypted = decryptText(account.cookieEncrypted)
+      if (decrypted && decrypted.trim()) return decrypted.trim()
+    } catch (e) {
+      console.warn(`[google.service] Failed to decrypt cookie for account ${account.id}:`, e)
+    }
+  }
+  // System-wide fallback from environment variable
+  if (process.env.GOOGLE_DRIVE_COOKIE && process.env.GOOGLE_DRIVE_COOKIE.trim()) {
+    return process.env.GOOGLE_DRIVE_COOKIE.trim()
+  }
+  // System-wide fallback from system settings table
+  try {
+    const setting = await prisma.systemSetting.findUnique({ where: { key: 'google_drive_cookie' } })
+    if (setting?.value && setting.value.trim()) return setting.value.trim()
+  } catch {}
+  return null
+}
+
 
 
 

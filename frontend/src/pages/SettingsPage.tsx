@@ -18,11 +18,13 @@ import {
   Monitor,
   Smartphone,
   Code2,
+  Database,
+  Trash2,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DummyModal } from '@/components/drive/DummyModal'
 import { GoogleLogo } from '@/components/auth/GoogleLogo'
-import { apiFetch, formatAvatarUrl, formatDate, API_URL } from '@/lib/api'
+import { apiFetch, formatAvatarUrl, formatDate, formatBytes, API_URL } from '@/lib/api'
 import { SecuritySettings } from '@/components/settings/SecuritySettings'
 import { getStoredUser, updateStoredUser, getAccessToken, clearAuthSession, type AuthUser } from '@/lib/auth'
 import { useLanguage } from '@/context/LanguageContext'
@@ -31,6 +33,15 @@ import { saveTheme, type Theme } from '@/lib/theme'
 import { cn } from '@/lib/utils'
 
 type SettingsTab = 'general' | 'profile' | 'google' | 'security' | 'api' | 'users' | 'activity' | 'system'
+
+type TempCacheStats = {
+  totalBytes: number
+  fileCount: number
+  cacheDir: string
+  ttlMinutes: number
+  maxGB: number
+  enabled: boolean
+}
 
 type ApiKey = {
   id: string
@@ -767,6 +778,76 @@ export function SettingsPage() {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
   }, [updateLog])
 
+  // ================= 8. TEMP CACHE STATES =================
+  const [tempCacheStats, setTempCacheStats] = useState<TempCacheStats | null>(null)
+  const [loadingTempCache, setLoadingTempCache] = useState(false)
+  const [savingTempCache, setSavingTempCache] = useState(false)
+  const [clearingTempCache, setClearingTempCache] = useState(false)
+  const [tempCacheTtl, setTempCacheTtl] = useState(30)
+  const [tempCacheMaxGb, setTempCacheMaxGb] = useState(10)
+  const [tempCacheEnabled, setTempCacheEnabled] = useState(true)
+
+  async function loadTempCache() {
+    setLoadingTempCache(true)
+    try {
+      const res = await apiFetch<TempCacheStats>('/system/temp-cache')
+      setTempCacheStats(res)
+      setTempCacheTtl(res.ttlMinutes)
+      setTempCacheMaxGb(res.maxGB)
+      setTempCacheEnabled(res.enabled)
+    } catch (err) {
+      console.error('Failed to load temp cache stats:', err)
+    } finally {
+      setLoadingTempCache(false)
+    }
+  }
+
+  async function handleSaveTempCache(patch?: { ttlMinutes?: number; maxGB?: number; enabled?: boolean }) {
+    setSavingTempCache(true)
+    try {
+      const payload = patch ?? {
+        ttlMinutes: Number(tempCacheTtl),
+        maxGB: Number(tempCacheMaxGb),
+        enabled: tempCacheEnabled,
+      }
+      const res = await apiFetch<{ status: string; stats: TempCacheStats }>('/system/temp-cache', {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+      })
+      setTempCacheStats(res.stats)
+      setTempCacheTtl(res.stats.ttlMinutes)
+      setTempCacheMaxGb(res.stats.maxGB)
+      setTempCacheEnabled(res.stats.enabled)
+      showSnackbar(vi ? 'Đã lưu cấu hình bộ nhớ đệm thành công!' : 'Temp cache settings saved successfully!')
+    } catch (err) {
+      showSnackbar(vi ? 'Không lưu được cấu hình bộ nhớ đệm!' : 'Failed to save temp cache settings!')
+    } finally {
+      setSavingTempCache(false)
+    }
+  }
+
+  async function handleClearTempCache() {
+    if (!window.confirm(vi ? 'Bạn có chắc chắn muốn xóa toàn bộ tệp trong bộ nhớ đệm tạm thời không?' : 'Are you sure you want to delete all temporary cache files?')) {
+      return
+    }
+    setClearingTempCache(true)
+    try {
+      const res = await apiFetch<{ status: string; deleted: number; freedBytes: number; stats: TempCacheStats }>('/system/temp-cache/clear', {
+        method: 'POST',
+      })
+      setTempCacheStats(res.stats)
+      showSnackbar(
+        vi
+          ? `Đã xóa ${res.deleted} tệp, giải phóng ${formatBytes(res.freedBytes)}!`
+          : `Cleared ${res.deleted} files, freed ${formatBytes(res.freedBytes)}!`
+      )
+    } catch (err) {
+      showSnackbar(vi ? 'Không xóa được bộ nhớ đệm!' : 'Failed to clear temp cache!')
+    } finally {
+      setClearingTempCache(false)
+    }
+  }
+
   // Initial tab-dependent data loaders
   useEffect(() => {
     if (activeTab === 'google' && user?.isAdmin) loadGoogleConfig()
@@ -777,6 +858,7 @@ export function SettingsPage() {
     if (activeTab === 'api') loadApiKeys()
     if (activeTab === 'users' && user?.isAdmin) loadUsersData()
     if (activeTab === 'activity') loadLogs()
+    if (activeTab === 'system' && user?.isAdmin) loadTempCache()
   }, [activeTab, user?.isAdmin])
 
   // Navigation tab definitions according to Section 3.9
@@ -1689,6 +1771,170 @@ export function SettingsPage() {
                       {restoringBackup ? (vi ? 'Đang khôi phục...' : 'Restoring...') : (vi ? 'Khôi phục từ tệp' : 'Restore File')}
                     </Button>
                   </label>
+                </div>
+              </div>
+
+              {/* Temp Cache Management */}
+              <div className="py-5 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <Database className="h-4 w-4 text-[#0b57d0] dark:text-[#a8c7fa]" />
+                      <h4 className="font-medium text-slate-900 dark:text-white">
+                        {vi ? 'Bộ nhớ đệm tạm thời (Temp Cache)' : 'Temporary Stream Cache'}
+                      </h4>
+                    </div>
+                    <p className="text-slate-500 text-[11px] mt-1 max-w-xl">
+                      {vi
+                        ? 'Khi xem video hoặc tải tệp qua HCDrive, dữ liệu được đệm tạm thời trên máy chủ để phát mượt mà, tua nhanh (HTTP 206 Range) và giảm tải cho Google Drive. Tệp đệm sẽ tự động xóa sau thời gian hết hạn hoặc khi vượt quá giới hạn ổ đĩa.'
+                        : 'Streams and preview files are cached on the server to allow instant seeking (HTTP 206 Range) and lower Google Drive quota usage. Cached files are automatically removed after expiration or when exceeding the size limit.'}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={loadTempCache}
+                      disabled={loadingTempCache}
+                      className="rounded-full h-8 px-3 text-xs gap-1.5"
+                      title={vi ? 'Làm mới thống kê' : 'Refresh stats'}
+                    >
+                      <RefreshCw className={cn('h-3.5 w-3.5', loadingTempCache && 'animate-spin')} />
+                      <span>{vi ? 'Làm mới' : 'Refresh'}</span>
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleClearTempCache}
+                      disabled={clearingTempCache || !tempCacheStats || tempCacheStats.totalBytes === 0}
+                      className="rounded-full h-8 px-3 text-xs gap-1.5 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 border-red-200 dark:border-red-900/50"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      <span>{clearingTempCache ? (vi ? 'Đang xóa...' : 'Clearing...') : (vi ? 'Xóa sạch đệm' : 'Clear Cache')}</span>
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Status card */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3.5 rounded-2xl bg-slate-50 dark:bg-[#18191a] border border-slate-200/80 dark:border-slate-800">
+                  <div>
+                    <span className="text-[11px] text-slate-400">{vi ? 'Dung lượng đang dùng' : 'Currently Used'}</span>
+                    <p className="text-base font-semibold text-slate-900 dark:text-white mt-0.5">
+                      {tempCacheStats ? formatBytes(tempCacheStats.totalBytes) : '--'}
+                      <span className="text-xs font-normal text-slate-400 ml-1.5">
+                        {tempCacheMaxGb > 0 ? `/ ${tempCacheMaxGb} GB` : `(${vi ? 'Không giới hạn' : 'Unlimited'})`}
+                      </span>
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-[11px] text-slate-400">{vi ? 'Số lượng tệp đệm' : 'Cached Files'}</span>
+                    <p className="text-base font-semibold text-slate-900 dark:text-white mt-0.5">
+                      {tempCacheStats ? `${tempCacheStats.fileCount} ${vi ? 'tệp' : 'files'}` : '--'}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-[11px] text-slate-400">{vi ? 'Trạng thái hoạt động' : 'Status'}</span>
+                    <p className="mt-0.5 flex items-center gap-1.5">
+                      <span className={cn('h-2 w-2 rounded-full', tempCacheEnabled ? 'bg-emerald-500' : 'bg-slate-400')} />
+                      <span className="text-xs font-medium text-slate-800 dark:text-slate-200">
+                        {tempCacheEnabled ? (vi ? 'Đang kích hoạt' : 'Active') : (vi ? 'Đã tắt' : 'Disabled')}
+                      </span>
+                    </p>
+                  </div>
+                </div>
+
+                {/* Settings form */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
+                  <div>
+                    <label className="block text-slate-700 dark:text-slate-300 font-medium mb-1.5">
+                      {vi ? 'Bật lưu đệm tạm thời' : 'Enable Stream Caching'}
+                    </label>
+                    <select
+                      value={tempCacheEnabled ? 'true' : 'false'}
+                      onChange={(e) => setTempCacheEnabled(e.target.value === 'true')}
+                      className="w-full h-9 px-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#1e1f20] text-slate-900 dark:text-white text-xs focus:outline-none focus:border-[#0b57d0]"
+                    >
+                      <option value="true">{vi ? 'Bật (Khuyến nghị)' : 'Enabled (Recommended)'}</option>
+                      <option value="false">{vi ? 'Tắt (Chỉ stream trực tiếp)' : 'Disabled (Direct proxy only)'}</option>
+                    </select>
+                    <p className="text-[10px] text-slate-400 mt-1">
+                      {vi ? 'Khi tắt, hệ thống không lưu đệm file nào vào ổ đĩa' : 'When disabled, no files are stored on server disk'}
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 dark:text-slate-300 font-medium mb-1.5">
+                      {vi ? 'Thời gian hết hạn (TTL)' : 'Cache Expiration (TTL)'}
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={[10, 15, 30, 60, 120, 360, 1440].includes(tempCacheTtl) ? String(tempCacheTtl) : 'custom'}
+                        onChange={(e) => {
+                          if (e.target.value !== 'custom') {
+                            setTempCacheTtl(Number(e.target.value))
+                          }
+                        }}
+                        className="w-full h-9 px-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#1e1f20] text-slate-900 dark:text-white text-xs focus:outline-none focus:border-[#0b57d0]"
+                      >
+                        <option value="10">10 {vi ? 'phút' : 'minutes'}</option>
+                        <option value="15">15 {vi ? 'phút' : 'minutes'}</option>
+                        <option value="30">30 {vi ? 'phút (Mặc định)' : 'minutes (Default)'}</option>
+                        <option value="60">1 {vi ? 'giờ (60 phút)' : 'hour'}</option>
+                        <option value="120">2 {vi ? 'giờ' : 'hours'}</option>
+                        <option value="360">6 {vi ? 'giờ' : 'hours'}</option>
+                        <option value="1440">24 {vi ? 'giờ (1 ngày)' : 'hours'}</option>
+                        <option value="custom">{vi ? 'Tự nhập phút…' : 'Custom minutes…'}</option>
+                      </select>
+                    </div>
+                    {![10, 15, 30, 60, 120, 360, 1440].includes(tempCacheTtl) && (
+                      <input
+                        type="number"
+                        min={1}
+                        max={43200}
+                        value={tempCacheTtl}
+                        onChange={(e) => setTempCacheTtl(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                        placeholder={vi ? 'Nhập số phút' : 'Minutes'}
+                        className="mt-1.5 w-full h-8 px-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#1e1f20] text-slate-900 dark:text-white text-xs focus:outline-none focus:border-[#0b57d0]"
+                      />
+                    )}
+                    <p className="text-[10px] text-slate-400 mt-1">
+                      {vi ? 'Tự xóa sau thời gian không có lượt truy cập' : 'Auto-deleted after inactivity'}
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 dark:text-slate-300 font-medium mb-1.5">
+                      {vi ? 'Dung lượng tối đa (Max Size)' : 'Max Cache Storage'}
+                    </label>
+                    <select
+                      value={String(tempCacheMaxGb)}
+                      onChange={(e) => setTempCacheMaxGb(Number(e.target.value))}
+                      className="w-full h-9 px-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#1e1f20] text-slate-900 dark:text-white text-xs focus:outline-none focus:border-[#0b57d0]"
+                    >
+                      <option value="2">2 GB</option>
+                      <option value="5">5 GB</option>
+                      <option value="10">10 GB {vi ? '(Mặc định)' : '(Default)'}</option>
+                      <option value="20">20 GB</option>
+                      <option value="50">50 GB</option>
+                      <option value="100">100 GB</option>
+                      <option value="0">{vi ? 'Không giới hạn (0)' : 'Unlimited (0)'}</option>
+                    </select>
+                    <p className="text-[10px] text-slate-400 mt-1">
+                      {vi ? 'Tự động xóa các file cũ nhất khi gần đầy' : 'LRU eviction when full'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex justify-end pt-1">
+                  <Button
+                    variant="filled"
+                    size="sm"
+                    onClick={() => handleSaveTempCache()}
+                    disabled={savingTempCache}
+                    className="rounded-full h-8 px-5 text-xs gap-1.5"
+                  >
+                    {savingTempCache ? (vi ? 'Đang lưu...' : 'Saving...') : (vi ? 'Lưu cấu hình bộ nhớ đệm' : 'Save Cache Settings')}
+                  </Button>
                 </div>
               </div>
             </div>

@@ -7,7 +7,7 @@ import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.
 import { isAdminUser } from '../../middleware/admin.middleware.js'
 import { decryptText, encryptText, hashToken, randomToken } from '../../utils/crypto.js'
 import { parkGoogleLink, resolveGoogleLoginUser } from '../../utils/google-identity.js'
-import { RCLONE_CLIENT_ID, createOAuthClient, syncGoogleQuota, getRcloneConfig, getCustomConfig, syncGoogleAppFolderFiles, listGoogleDriveItems, createGoogleDriveFolder, deleteGoogleDriveItem } from '../google/google.service.js'
+import { RCLONE_CLIENT_ID, createOAuthClient, syncGoogleQuota, getRcloneConfig, getCustomConfig, syncGoogleAppFolderFiles, listGoogleDriveItems, createGoogleDriveFolder, deleteGoogleDriveItem, getAccountCookie } from '../google/google.service.js'
 import { syncS3Quota, testS3Connection } from '../s3/s3.service.js'
 import { mountAccountTransferRoutes } from './account-transfer.js'
 import { mountAccountDriveRoutes } from '../google/drive-features.js'
@@ -26,8 +26,102 @@ const s3ConnectSchema = z.object({
   quotaBytes: z.string().regex(/^\d+$/).optional().nullable(),
 })
 
-async function syncQuotaForAccount(account: { id: string; provider: string }) {
+export async function verifyGoogleCookie(cookie: string): Promise<{ valid: boolean; email?: string | null; error?: string }> {
+  let cleanCookie = cookie.trim()
+  if (cleanCookie.toLowerCase().startsWith('cookie:')) cleanCookie = cleanCookie.slice(7).trim()
+  if ((cleanCookie.startsWith('"') && cleanCookie.endsWith('"')) || (cleanCookie.startsWith("'") && cleanCookie.endsWith("'"))) {
+    cleanCookie = cleanCookie.slice(1, -1).trim()
+  }
+
+  const hasGoogleSession = cleanCookie.includes('SID=') || cleanCookie.includes('HSID=') || cleanCookie.includes('SSID=') || cleanCookie.includes('SAPISID=') || cleanCookie.includes('OSID=')
+
+  try {
+    const res = await fetch('https://drive.google.com/drive/my-drive', {
+      headers: {
+        'Cookie': cleanCookie,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Referer': 'https://drive.google.com/',
+      },
+      redirect: 'manual',
+    })
+
+    const location = res.headers.get('location') || ''
+    if (res.status === 302 || res.status === 301 || res.status === 303) {
+      if (location.includes('accounts.google.com') || location.includes('ServiceLogin')) {
+        return { valid: false, error: 'Cookie đã hết hạn hoặc không có phiên đăng nhập Google Drive hợp lệ.' }
+      }
+    }
+
+    if (res.status === 200) {
+      const html = await res.text()
+      if (html.includes('Sign in - Google Accounts') || html.includes('Đăng nhập - Tài khoản Google')) {
+        return { valid: false, error: 'Cookie đã hết hạn hoặc không có phiên đăng nhập Google Drive hợp lệ.' }
+      }
+
+      let detectedEmail: string | null = null
+      const emailMatches = html.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g)
+      if (emailMatches) {
+        const userEmails = emailMatches.filter((e) => {
+          const lower = e.toLowerCase()
+          return !lower.endsWith('@google.com') && !lower.endsWith('example.com') && !lower.includes('support') && !lower.includes('feedback') && !lower.includes('w3.org')
+        })
+        if (userEmails.length > 0) detectedEmail = userEmails[0]
+      }
+
+      return { valid: true, email: detectedEmail }
+    }
+
+    if (hasGoogleSession) {
+      return { valid: true }
+    }
+
+    return { valid: false, error: `Google Drive trả về mã HTTP ${res.status}. Không thể xác thực cookie.` }
+  } catch (err: any) {
+    if (hasGoogleSession) {
+      return { valid: true }
+    }
+    return { valid: false, error: `Lỗi kết nối tới Google Drive: ${err?.message || err}` }
+  }
+}
+
+async function syncCookieQuota(accountId: string) {
+  const account = await prisma.connectedAccount.findUniqueOrThrow({ where: { id: accountId } })
+  const cookie = await getAccountCookie(account)
+  if (!cookie) {
+    await prisma.connectedAccount.update({ where: { id: accountId }, data: { lastError: 'Chưa cấu hình Cookie' } })
+  } else {
+    const verification = await verifyGoogleCookie(cookie)
+    if (!verification.valid) {
+      await prisma.connectedAccount.update({
+        where: { id: accountId },
+        data: { lastError: verification.error || 'Cookie đã hết hạn hoặc không hợp lệ' },
+      })
+    } else {
+      await prisma.connectedAccount.update({
+        where: { id: accountId },
+        data: { lastError: null },
+      })
+    }
+  }
+  return prisma.storageAccount.upsert({
+    where: { connectedAccountId: accountId },
+    create: {
+      connectedAccountId: accountId,
+      totalBytes: 15n * 1024n * 1024n * 1024n,
+      usedBytes: 0n,
+      availableBytes: 15n * 1024n * 1024n * 1024n,
+      lastSyncedAt: new Date(),
+    },
+    update: {
+      lastSyncedAt: new Date(),
+    },
+  })
+}
+
+async function syncQuotaForAccount(account: { id: string; provider: string; connectedVia?: string | null }) {
   if (account.provider === 's3') return syncS3Quota(account.id)
+  if (account.connectedVia === 'cookie') return syncCookieQuota(account.id)
   return syncGoogleQuota(account.id)
 }
 
@@ -80,13 +174,14 @@ connectedAccountRouter.get('/', requireAuth, async (req: AuthRequest, res, next)
 
     return res.json({
       canConnectStorage: isAdmin || allowUserConnect,
-      accounts: syncedAccounts.map(({ accessTokenEncrypted: _a, refreshTokenEncrypted: _r, proxyUrlEncrypted, storageAccount, user, ...account }) => ({
+      accounts: syncedAccounts.map(({ accessTokenEncrypted: _a, refreshTokenEncrypted: _r, proxyUrlEncrypted, cookieEncrypted, storageAccount, user, ...account }) => ({
         ...account,
         isShared: account.isShared,
         isOwner: account.userId === req.user!.id,
         ownerEmail: user?.email,
         hasProxy: Boolean(proxyUrlEncrypted),
         proxyUrl: maskProxyUrl(getAccountProxyUrl({ proxyUrlEncrypted })),
+        hasCookie: Boolean(cookieEncrypted),
         storageAccount: storageAccount ? {
           ...storageAccount,
           totalBytes: storageAccount.totalBytes?.toString() ?? null,
@@ -190,6 +285,7 @@ connectedAccountRouter.get('/:id/details', requireAuth, async (req: AuthRequest,
       } : null,
       proxyUrl: canSeePrivate ? maskProxyUrl(getAccountProxyUrl(account)) : null,
       hasProxy: Boolean(account.proxyUrlEncrypted),
+      hasCookie: Boolean(account.cookieEncrypted),
       s3,
       storage: storage ? {
         totalBytes: storage.totalBytes?.toString() ?? null,
@@ -271,8 +367,113 @@ connectedAccountRouter.get('/google/auth-methods', requireAuth, async (_req: Aut
             : 'Chưa cấu hình trong Settings (Cần thêm Client ID & Secret trước khi dùng).',
           badge: customConfig ? 'Đã cấu hình' : 'Chưa cấu hình',
           available: Boolean(customConfig),
+        },
+        {
+          id: 'cookie',
+          name: 'Cookie Google Drive (Session Cookie)',
+          description: 'Kết nối trực tiếp bằng Cookie phiên đăng nhập, hỗ trợ xem và stream video/tệp bảo vệ quyền riêng tư mà không cần cấp quyền OAuth.',
+          badge: 'Bypass riêng tư',
+          available: true,
         }
       ]
+    })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+const googleCookieConnectSchema = z.object({
+  cookie: z.string().trim().min(10, 'Cookie không được để trống'),
+  email: z.string().trim().optional().nullable(),
+  displayName: z.string().trim().optional().nullable(),
+})
+
+connectedAccountRouter.post('/google/cookie', requireAuth, async (req: AuthRequest, res, next) => {
+  try {
+    await assertCanConnectStorage(req.user!.id)
+    const body = googleCookieConnectSchema.parse(req.body)
+    let cleanCookie = body.cookie.trim()
+    if (cleanCookie.toLowerCase().startsWith('cookie:')) cleanCookie = cleanCookie.slice(7).trim()
+    if ((cleanCookie.startsWith('"') && cleanCookie.endsWith('"')) || (cleanCookie.startsWith("'") && cleanCookie.endsWith("'"))) {
+      cleanCookie = cleanCookie.slice(1, -1).trim()
+    }
+
+    const verification = await verifyGoogleCookie(cleanCookie)
+    if (!verification.valid) {
+      return res.status(400).json({
+        code: 'INVALID_COOKIE',
+        message: verification.error || 'Cookie Google Drive không hợp lệ hoặc đã hết hạn.'
+      })
+    }
+
+    const email = (body.email && body.email.trim()) || verification.email || `drive-cookie-${randomToken(4).toLowerCase()}@gmail.com`
+    const displayName = (body.displayName && body.displayName.trim()) || body.email?.trim() || verification.email || 'Google Drive (Cookie)'
+
+    let providerConfig = await prisma.providerConfig.findFirst({
+      where: { provider: 'google_drive', status: 'active' },
+      orderBy: { createdAt: 'desc' },
+    })
+    if (!providerConfig) {
+      providerConfig = await getRcloneConfig()
+    }
+
+    const providerAccountId = `cookie:${email.toLowerCase()}`
+    const existing = await prisma.connectedAccount.findUnique({
+      where: { userId_provider_providerAccountId: { userId: req.user!.id, provider: 'google_drive', providerAccountId } }
+    })
+
+    const account = existing
+      ? await prisma.connectedAccount.update({
+          where: { id: existing.id },
+          data: {
+            cookieEncrypted: encryptText(cleanCookie),
+            displayName,
+            status: 'connected',
+            lastError: null,
+            connectedVia: 'cookie',
+          }
+        })
+      : await prisma.connectedAccount.create({
+          data: {
+            userId: req.user!.id,
+            providerConfigId: providerConfig.id,
+            provider: 'google_drive',
+            providerAccountId,
+            email,
+            displayName,
+            accessTokenEncrypted: null,
+            refreshTokenEncrypted: null,
+            tokenExpiresAt: null,
+            scopes: ['cookie'],
+            status: 'connected',
+            connectedVia: 'cookie',
+            cookieEncrypted: encryptText(cleanCookie),
+          }
+        })
+
+    await prisma.storageAccount.upsert({
+      where: { connectedAccountId: account.id },
+      create: {
+        connectedAccountId: account.id,
+        totalBytes: 15n * 1024n * 1024n * 1024n,
+        usedBytes: 0n,
+        availableBytes: 15n * 1024n * 1024n * 1024n,
+        lastSyncedAt: new Date(),
+      },
+      update: {
+        lastSyncedAt: new Date(),
+      }
+    })
+
+    return res.json({
+      success: true,
+      account: {
+        id: account.id,
+        email: account.email,
+        displayName: account.displayName,
+        connectedVia: account.connectedVia,
+        hasCookie: true,
+      }
     })
   } catch (error) {
     return next(error)
@@ -728,6 +929,41 @@ connectedAccountRouter.patch('/:id/proxy', requireAuth, async (req: AuthRequest,
   }
 })
 
+const cookieUpdateSchema = z.object({
+  cookie: z.string().trim().nullable().optional(),
+})
+
+connectedAccountRouter.patch('/:id/cookie', requireAuth, async (req: AuthRequest, res, next) => {
+  try {
+    const userId = req.user!.id
+    const isAdmin = await isAdminUser(userId)
+    const account = await prisma.connectedAccount.findFirst({
+      where: { id: String(req.params.id), ...(isAdmin ? {} : { userId }) },
+    })
+    if (!account) {
+      return res.status(403).json({ code: 'FORBIDDEN', message: 'Bạn không có quyền sửa cookie của tài khoản này.' })
+    }
+
+    const body = cookieUpdateSchema.parse(req.body)
+    let cookieEncrypted: string | null = null
+    if (body.cookie && body.cookie.trim()) {
+      cookieEncrypted = encryptText(body.cookie.trim())
+    }
+
+    await prisma.connectedAccount.update({
+      where: { id: account.id },
+      data: { cookieEncrypted },
+    })
+
+    return res.json({
+      status: 'ok',
+      hasCookie: Boolean(cookieEncrypted),
+    })
+  } catch (error) {
+    return next(error)
+  }
+})
+
 connectedAccountRouter.patch('/:id/share', requireAuth, async (req: AuthRequest, res, next) => {
   try {
     const accountId = String(req.params.id)
@@ -784,7 +1020,7 @@ connectedAccountRouter.post('/:id/sync-quota', requireAuth, async (req: AuthRequ
       where: { id: accountId, OR: [{ userId: req.user!.id }, { isShared: true }] }
     })
     const quota = await syncQuotaForAccount(account)
-    if (account.provider === 'google_drive') {
+    if (account.provider === 'google_drive' && account.connectedVia !== 'cookie') {
       syncGoogleAppFolderFiles(account.id, req.user!.id).catch((e) => console.error('Sync files on quota refresh error:', e))
     }
     return res.json({

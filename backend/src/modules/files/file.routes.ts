@@ -22,6 +22,7 @@ import { mapLimit } from '../../utils/concurrency.js'
 import { ownedBy, requireOwned, type OwnedRequest } from '../../middleware/ownership.js'
 import { exportExtension, mountDriveFeatureRoutes, thumbnailUrlFor } from '../google/drive-features.js'
 import { copySingleFile } from './cross-account-copy.js'
+import { getCacheProgress } from '../../services/temp-cache.service.js'
 
 
 
@@ -39,6 +40,20 @@ fileRouter.get('/preview/:token', async (req, res, next) => {
     })
     if (!preview || preview.file.status !== 'active') return res.status(404).json({ code: 'PREVIEW_NOT_FOUND', message: 'Preview token not found.' })
     return streamProviderFile(preview.file, req.headers.range, res, { disposition: 'inline' })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+fileRouter.get('/preview-progress/:token', async (req, res, next) => {
+  try {
+    const token = String(req.params.token)
+    const preview = await prisma.filePreviewToken.findFirst({
+      where: { tokenHash: hashToken(token), expiresAt: { gt: new Date() } },
+      include: { file: true },
+    })
+    if (!preview || preview.file.status !== 'active') return res.status(404).json({ code: 'PREVIEW_NOT_FOUND', message: 'Preview token not found.' })
+    return res.json(getCacheProgress(preview.file.providerFileId || preview.file.id))
   } catch (error) {
     return next(error)
   }
@@ -993,6 +1008,18 @@ fileRouter.get('/:id/download', async (req: AuthRequest, res, next) => {
     const file = await resolveFileOrFromDrive(fileId, req.user!.id)
     if (!file) return res.status(404).json({ code: 'FILE_NOT_FOUND', message: 'File not found.' })
     return streamProviderFile(file, req.headers.range, res, { disposition: 'attachment', ...(format ? { exportMimeType: format, exportExtension: exportExtension(format) } : {}) })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+fileRouter.get('/:id/cache-progress', requireAuth, async (req: AuthRequest, res, next) => {
+  try {
+    const fileId = String(req.params.id)
+    const file = await resolveFileOrFromDrive(fileId, req.user!.id)
+    const key = file?.providerFileId || fileId
+    const progress = getCacheProgress(key)
+    return res.json(progress)
   } catch (error) {
     return next(error)
   }

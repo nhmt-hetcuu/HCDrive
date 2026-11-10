@@ -11,6 +11,13 @@ import { hashPassword } from '../../utils/password.js'
 import { getCustomConfig } from '../google/google.service.js'
 import Busboy from 'busboy'
 import { securityRouter } from './security.routes.js'
+import {
+  getTempCacheStats,
+  setCacheTTLMinutes,
+  setCacheMaxGB,
+  setCacheEnabled,
+  purgeAllTempCache,
+} from '../../services/temp-cache.service.js'
 
 export const systemRouter = Router()
 // Everything here changes global state (OAuth config, code, database), so it is admin-only.
@@ -397,6 +404,73 @@ systemRouter.patch('/settings', async (req, res, next) => {
       status: 'ok',
       allowRegistration: regSetting ? regSetting.value !== 'false' : true,
       allowUserDriveConnect: driveSetting ? driveSetting.value === 'true' : false,
+    })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+// Temp Cache Management (Admin only)
+systemRouter.get('/temp-cache', async (_req, res, next) => {
+  try {
+    return res.json(getTempCacheStats())
+  } catch (error) {
+    return next(error)
+  }
+})
+
+systemRouter.patch('/temp-cache', async (req, res, next) => {
+  try {
+    const body = z.object({
+      ttlMinutes: z.number().int().min(1).max(43200).optional(),
+      maxGB: z.number().min(0).max(1000).optional(),
+      enabled: z.boolean().optional(),
+    }).parse(req.body)
+
+    if (body.ttlMinutes !== undefined) {
+      setCacheTTLMinutes(body.ttlMinutes)
+      await prisma.systemSetting.upsert({
+        where: { key: 'temp_cache_ttl_minutes' },
+        create: { key: 'temp_cache_ttl_minutes', value: String(body.ttlMinutes) },
+        update: { value: String(body.ttlMinutes) },
+      })
+    }
+
+    if (body.maxGB !== undefined) {
+      setCacheMaxGB(body.maxGB)
+      await prisma.systemSetting.upsert({
+        where: { key: 'temp_cache_max_gb' },
+        create: { key: 'temp_cache_max_gb', value: String(body.maxGB) },
+        update: { value: String(body.maxGB) },
+      })
+    }
+
+    if (body.enabled !== undefined) {
+      setCacheEnabled(body.enabled)
+      await prisma.systemSetting.upsert({
+        where: { key: 'temp_cache_enabled' },
+        create: { key: 'temp_cache_enabled', value: String(body.enabled) },
+        update: { value: String(body.enabled) },
+      })
+    }
+
+    return res.json({
+      status: 'ok',
+      stats: getTempCacheStats(),
+    })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+systemRouter.post('/temp-cache/clear', async (_req, res, next) => {
+  try {
+    const result = purgeAllTempCache()
+    return res.json({
+      status: 'ok',
+      deleted: result.deleted,
+      freedBytes: result.freedBytes,
+      stats: getTempCacheStats(),
     })
   } catch (error) {
     return next(error)

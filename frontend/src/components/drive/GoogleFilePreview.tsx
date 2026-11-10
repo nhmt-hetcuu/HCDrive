@@ -12,11 +12,12 @@ import {
 import { Button } from '@/components/ui/button'
 import { getFileVisual } from '@/components/drive/DriveGridView'
 import { API_URL, apiFetch, formatBytes } from '@/lib/api'
-import { getAccessToken } from '@/lib/auth'
 import { createPlyr, ensurePlyr } from '@/lib/plyr'
 import { getPreviewKind, officeViewerUrl } from '@/lib/preview'
 import { useLanguage } from '@/context/LanguageContext'
 import { useSnackbar } from '@/context/SnackbarContext'
+import { useDownload } from '@/context/DownloadContext'
+import { StreamProgressBar } from '@/components/StreamProgressBar'
 import type { FileItem } from '@/data/drive-data'
 import { cn } from '@/lib/utils'
 
@@ -41,12 +42,13 @@ export function GoogleFilePreview({
 }: GoogleFilePreviewProps) {
   const { lang } = useLanguage()
   const { showSnackbar } = useSnackbar()
+  const { startDownload } = useDownload()
   const vi = lang === 'vi'
 
   const [previewUrl, setPreviewUrl] = useState('')
   const [previewError, setPreviewError] = useState('')
   const [loading, setLoading] = useState(false)
-  const [previewMode, setPreviewMode] = useState<'drive' | 'stream'>('drive')
+  const [previewMode, setPreviewMode] = useState<'drive' | 'stream'>('stream')
   const [moreMenuOpen, setMoreMenuOpen] = useState(false)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const plyrInstanceRef = useRef<{ destroy: () => void } | null>(null)
@@ -171,23 +173,20 @@ export function GoogleFilePreview({
   const Icon = visual.icon
 
   async function handleDownload() {
-    if (onDownload) {
-      onDownload(file!)
+    if (onDownload && file) {
+      onDownload(file)
       return
     }
-    if (!file?.id) return
+    if (!file) return
     try {
-      const response = await fetch(`${API_URL}/files/${file.id}/download`, {
-        headers: { Authorization: `Bearer ${getAccessToken()}` },
-      })
-      if (!response.ok) throw new Error('Download failed')
-      const blob = await response.blob()
-      const blobUrl = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = blobUrl
-      link.download = file.name
-      link.click()
-      URL.revokeObjectURL(blobUrl)
+      if (file.id) {
+        showSnackbar(vi ? `Đang bắt đầu tải ${file.name}...` : `Starting download of ${file.name}...`)
+        await startDownload(`/files/${file.id}/download`, file.name, { auth: true })
+        return
+      }
+      if (file.providerFileId) {
+        window.open(`https://drive.google.com/uc?id=${file.providerFileId}&export=download`, '_blank')
+      }
     } catch {
       showSnackbar(vi ? 'Tải xuống thất bại' : 'Download failed')
     }
@@ -374,10 +373,15 @@ export function GoogleFilePreview({
               onError={() => setPreviewError(vi ? 'Không thể tải ảnh xem trước.' : 'Failed to load preview.')}
             />
           ) : previewKind === 'video' && previewUrl ? (
-            <div className="w-full max-w-4xl max-h-[80vh] rounded-xl overflow-hidden shadow-2xl bg-black">
-              <video ref={videoRef} controls playsInline preload="metadata" className="w-full h-full">
-                <source src={previewUrl} type={file.mimeType} />
-              </video>
+            <div className="w-full max-w-4xl max-h-[82vh] rounded-xl overflow-hidden shadow-2xl bg-black flex flex-col">
+              <div className="p-2 sm:p-2.5 bg-black/60 border-b border-white/10 shrink-0">
+                <StreamProgressBar streamUrl={previewUrl} fileId={file.id} vi={vi} />
+              </div>
+              <div className="flex-1 relative flex items-center justify-center min-h-0">
+                <video ref={videoRef} controls playsInline preload="metadata" className="w-full h-full max-h-[72vh]">
+                  <source src={previewUrl} type={file.mimeType} />
+                </video>
+              </div>
             </div>
           ) : previewKind === 'document' && previewUrl ? (
             <iframe

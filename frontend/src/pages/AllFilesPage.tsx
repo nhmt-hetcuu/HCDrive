@@ -20,9 +20,9 @@ import { DetailsPanel } from '@/components/drive/DetailsPanel'
 import { GoogleFilePreview } from '@/components/drive/GoogleFilePreview'
 import { Input } from '@/components/ui/input'
 import { API_URL, apiFetch, formatBytes, formatDate } from '@/lib/api'
-import { getAccessToken } from '@/lib/auth'
 import type { FileItem, FolderItem } from '@/data/drive-data'
 import { useUpload } from '@/context/UploadContext'
+import { useDownload } from '@/context/DownloadContext'
 import { useLanguage } from '@/context/LanguageContext'
 import { useSnackbar } from '@/context/SnackbarContext'
 import { useDriveLayoutActions } from '@/layouts/DriveLayout'
@@ -165,6 +165,7 @@ export function AllFilesPage() {
   const [loading, setLoading] = useState(false)
   const [syncingDrive, setSyncingDrive] = useState(false)
   const { uploadFiles, uploadBatch } = useUpload()
+  const { startDownload } = useDownload()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const folderInputRef = useRef<HTMLInputElement>(null)
   const [inviteOpen, setInviteOpen] = useState(false)
@@ -299,22 +300,8 @@ export function AllFilesPage() {
     if (!target?.id) return
     setFolderContextMenu({ x: 0, y: 0, folder: null })
     try {
-      showSnackbar(lang === 'vi' ? 'Đang nén thư mục và tải xuống...' : 'Zipping folder and downloading...')
-      const response = await fetch(`${API_URL}/folders/${target.id}/download`, {
-        headers: { Authorization: `Bearer ${getAccessToken()}` }
-      })
-      if (!response.ok) {
-        const err = await response.json().catch(() => null)
-        throw new Error(err?.message || (lang === 'vi' ? 'Tải thư mục thất bại' : 'Download folder failed'))
-      }
-      const blob = await response.blob()
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = `${target.name}.zip`
-      link.click()
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
-      showSnackbar(lang === 'vi' ? 'Tải thư mục hoàn tất' : 'Folder downloaded')
+      showSnackbar(lang === 'vi' ? `Đang tải thư mục "${target.name}" (ZIP)...` : `Downloading folder "${target.name}" (ZIP)...`)
+      await startDownload(`/folders/${target.id}/download`, `${target.name}.zip`, { auth: true })
     } catch (error) {
       showSnackbar(errorText(error, lang === 'vi' ? 'Tải thư mục thất bại' : 'Folder download failed'))
     }
@@ -793,16 +780,8 @@ export function AllFilesPage() {
     setContextMenu({ x: 0, y: 0, file: null })
     if (!file?.id) return
     try {
-      const response = await fetch(`${API_URL}/files/${file.id}/download`, { headers: { Authorization: `Bearer ${getAccessToken()}` } })
-      if (!response.ok) throw new Error(lang === 'vi' ? 'Tải xuống thất bại' : 'Download failed')
-      const blob = await response.blob()
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = file.name
-      link.click()
-      // Revoking right away can cancel the download in some browsers.
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+      showSnackbar(lang === 'vi' ? `Đang bắt đầu tải ${file.name}...` : `Starting download of ${file.name}...`)
+      await startDownload(`/files/${file.id}/download`, file.name, { auth: true })
     } catch (error) {
       showSnackbar(errorText(error, lang === 'vi' ? 'Tải xuống thất bại' : 'Download failed'))
     }
@@ -814,22 +793,13 @@ export function AllFilesPage() {
     setLoading(true)
     setMessage('')
     try {
-      const response = await fetch(`${API_URL}/files/batch-download`, {
+      showSnackbar(lang === 'vi' ? `Đang nén và tải ZIP ${selectedIds.length} tệp...` : `Zipping and downloading ${selectedIds.length} files...`)
+      await startDownload('/files/batch-download', 'hcdrive-download.zip', {
+        auth: true,
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${getAccessToken()}`
-        },
-        body: JSON.stringify({ fileIds: selectedIds })
+        body: JSON.stringify({ fileIds: selectedIds }),
+        headers: { 'Content-Type': 'application/json' },
       })
-      if (!response.ok) throw new Error('Failed to download ZIP file')
-      const blob = await response.blob()
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = 'hcdrive-download.zip'
-      link.click()
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
       clearSelection()
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Batch download failed')

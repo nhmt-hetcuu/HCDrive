@@ -92,7 +92,7 @@ async function selectAccount(userId: string, sizeBytes: bigint, reservedBytesByA
     ],
     provider: { in: ['google_drive', 's3'] },
     status: 'connected',
-    ...(targetAccountId ? { id: targetAccountId } : {}),
+    ...(targetAccountId ? { id: targetAccountId } : { connectedVia: { not: 'cookie' } }),
   }
 
   const accounts = await prisma.connectedAccount.findMany({
@@ -118,14 +118,7 @@ async function selectAccount(userId: string, sizeBytes: bigint, reservedBytesByA
   }))
 
   const fresh = await prisma.connectedAccount.findMany({
-    where: {
-      OR: [
-        { userId },
-        { isShared: true },
-      ],
-      provider: { in: ['google_drive', 's3'] },
-      status: 'connected',
-    },
+    where: whereClause,
     include: { storageAccount: true },
   })
 

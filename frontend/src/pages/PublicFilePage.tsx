@@ -8,6 +8,8 @@ import { API_URL, apiFetch, formatBytes, formatDriveDate } from '@/lib/api'
 import { createPlyr, ensurePlyr } from '@/lib/plyr'
 import { getPreviewKind, officeViewerUrl } from '@/lib/preview'
 import { useLanguage } from '@/context/LanguageContext'
+import { useDownload } from '@/context/DownloadContext'
+import { StreamProgressBar } from '@/components/StreamProgressBar'
 import { cn } from '@/lib/utils'
 
 type PublicFile = { name: string; mimeType: string; sizeBytes: string; createdAt: string }
@@ -15,6 +17,7 @@ type PublicFile = { name: string; mimeType: string; sizeBytes: string; createdAt
 export function PublicFilePage({ embed = false }: { embed?: boolean }) {
   const { token } = useParams()
   const { lang } = useLanguage()
+  const { startDownload } = useDownload()
   const vi = lang === 'vi'
 
   const [file, setFile] = useState<PublicFile | null>(null)
@@ -103,10 +106,15 @@ export function PublicFilePage({ embed = false }: { embed?: boolean }) {
           className="max-h-[82vh] max-w-[90vw] object-contain rounded-lg shadow-2xl"
         />
       ) : kind === 'video' ? (
-        <div className="w-full max-w-4xl max-h-[80vh] rounded-xl overflow-hidden shadow-2xl bg-black">
-          <video ref={videoRef} controls playsInline preload="metadata" className="w-full h-full">
-            <source src={previewUrl} type={file.mimeType} />
-          </video>
+        <div className="w-full max-w-4xl max-h-[82vh] rounded-xl overflow-hidden shadow-2xl bg-black flex flex-col">
+          <div className="p-2.5 sm:p-3 bg-black/60 border-b border-white/10 shrink-0">
+            <StreamProgressBar streamUrl={previewUrl} vi={vi} />
+          </div>
+          <div className="flex-1 relative flex items-center justify-center min-h-0">
+            <video ref={videoRef} controls playsInline preload="metadata" className="w-full h-full max-h-[72vh]">
+              <source src={previewUrl} type={file.mimeType} />
+            </video>
+          </div>
         </div>
       ) : kind === 'document' ? (
         <iframe src={previewUrl} title={file.name} className="h-full w-full rounded-xl border border-white/10 bg-white" />
@@ -129,12 +137,16 @@ export function PublicFilePage({ embed = false }: { embed?: boolean }) {
               ? 'Tệp này không hỗ trợ hiển thị trực tiếp. Vui lòng tải xuống để mở trên thiết bị.'
               : 'This file cannot be previewed. Download it to view on your device.'}
           </p>
-          <a href={downloadUrl} download>
-            <Button variant="filled" className="rounded-full gap-2 px-6">
-              <Download className="h-4 w-4" />
-              <span>{vi ? 'Tải xuống' : 'Download'}</span>
-            </Button>
-          </a>
+          <Button
+            variant="filled"
+            className="rounded-full gap-2 px-6"
+            onClick={() => {
+              if (file) startDownload(downloadUrl, file.name, { auth: false })
+            }}
+          >
+            <Download className="h-4 w-4" />
+            <span>{vi ? 'Tải xuống' : 'Download'}</span>
+          </Button>
         </div>
       )}
     </div>
@@ -171,12 +183,17 @@ export function PublicFilePage({ embed = false }: { embed?: boolean }) {
               <span>Embed</span>
             </Button>
           </a>
-          <a href={downloadUrl} download>
-            <Button variant="filled" size="sm" className="rounded-full gap-1.5 text-xs px-4">
-              <Download className="h-4 w-4" />
-              <span>{vi ? 'Tải xuống' : 'Download'}</span>
-            </Button>
-          </a>
+          <Button
+            variant="filled"
+            size="sm"
+            className="rounded-full gap-1.5 text-xs px-4"
+            onClick={() => {
+              if (file) startDownload(downloadUrl, file.name, { auth: false })
+            }}
+          >
+            <Download className="h-4 w-4" />
+            <span>{vi ? 'Tải xuống' : 'Download'}</span>
+          </Button>
         </div>
       </header>
 

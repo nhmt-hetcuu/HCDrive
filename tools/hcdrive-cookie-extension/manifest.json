@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "HCDrive - Google Drive Cookie Exporter",
+  "version": "1.0.0",
+  "description": "Tự động trích xuất Cookie Google Drive để kết nối nhanh vào HCDrive",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Xuất Cookie Google Drive",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "permissions": [
+    "cookies",
+    "activeTab",
+    "clipboardWrite",
+    "storage"
+  ],
+  "host_permissions": [
+    "*://*.google.com/*",
+    "*://drive.google.com/*",
+    "*://accounts.google.com/*"
+  ]
+}

@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  Cookie,
   Download,
   Circle,
   ExternalLink,
@@ -35,11 +36,13 @@ import {
 import { apiFetch, API_URL, formatBytes, formatDriveDate } from '@/lib/api'
 import { useLanguage } from '@/context/LanguageContext'
 import { useSnackbar } from '@/context/SnackbarContext'
+import { useDownload } from '@/context/DownloadContext'
 import { getFileVisual } from '@/components/drive/DriveGridView'
 import { DummyModal } from '@/components/drive/DummyModal'
+import { StreamProgressBar } from '@/components/StreamProgressBar'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { CourseDetailsModal, SaveToDriveModal, ShareCourseModal, lessonDownloadUrl, startCourseDownload } from '@/components/drive/LibraryDialogs'
+import { CourseDetailsModal, DriveCookieModal, SaveToDriveModal, ShareCourseModal, lessonDownloadUrl, startCourseDownload } from '@/components/drive/LibraryDialogs'
 import { useMenuPosition } from '@/hooks/useMenuPosition'
 
 // Library: Drive links other people shared with the user (a bought course, a lesson folder, a document),
@@ -104,6 +107,7 @@ export function LibraryPage() {
   const { lang } = useLanguage()
   const vi = lang === 'vi'
   const { showSnackbar } = useSnackbar()
+  const { startDownload } = useDownload()
   const [searchParams, setSearchParams] = useSearchParams()
   const openId = searchParams.get('link')
 
@@ -122,7 +126,7 @@ export function LibraryPage() {
   function cardAction(link: SavedLink, action: CardAction) {
     if (action === 'open') open(link)
     else if (action === 'info') setDetailsLink(link)
-    else if (action === 'download') startCourseDownload(link.id).catch((error) => showSnackbar(errorText(error, vi ? 'Không tải được' : 'Could not download')))
+    else if (action === 'download') startCourseDownload(link.id, undefined, startDownload).catch((error) => showSnackbar(errorText(error, vi ? 'Không tải được' : 'Could not download')))
     else if (action === 'save') setSavingToDrive(link)
     else if (action === 'share') setSharing(link)
     else if (action === 'edit') setEditing(link)
@@ -814,6 +818,7 @@ function RenameCollectionModal({ name, vi, onClose, onDone }: { name: string | n
 
 function LessonView({ link, vi, onBack, onEdit, editing, onEdited, onCloseEdit, collections, accounts }: { link: SavedLink; vi: boolean; onBack: () => void; onEdit: () => void; editing: SavedLink | null; onEdited: (link: SavedLink) => void; onCloseEdit: () => void; collections: string[]; accounts: Array<{ id: string; email: string }> }) {
   const { showSnackbar } = useSnackbar()
+  const { startDownload } = useDownload()
   const isCourse = link.isCourse !== false
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
   const [previewItem, setPreviewItem] = useState<Lesson | null>(null)
@@ -821,6 +826,8 @@ function LessonView({ link, vi, onBack, onEdit, editing, onEdited, onCloseEdit, 
   const [items, setItems] = useState<Lesson[] | null>(null)
   const [error, setError] = useState('')
   const [account, setAccount] = useState<{ id: string; email: string } | null>(null)
+  const [hasCookie, setHasCookie] = useState(false)
+  const [cookieOpen, setCookieOpen] = useState(false)
   const [current, setCurrent] = useState<Lesson | null>(null)
   const [shareOpen, setShareOpen] = useState(false)
   const [saveOpen, setSaveOpen] = useState(false)
@@ -835,11 +842,12 @@ function LessonView({ link, vi, onBack, onEdit, editing, onEdited, onCloseEdit, 
     const params = new URLSearchParams()
     if (folder.id) params.set('folderId', folder.id)
     if (folder.rk) params.set('rk', folder.rk)
-    apiFetch<{ items: Lesson[]; account: { id: string; email: string } }>(`/library/${link.id}/items${params.toString() ? `?${params}` : ''}`)
+    apiFetch<{ items: Lesson[]; account: { id: string; email: string }; hasCookie?: boolean }>(`/library/${link.id}/items${params.toString() ? `?${params}` : ''}`)
       .then((data) => {
         if (cancelled) return
         setItems(data.items)
         setAccount(data.account)
+        if (data.hasCookie !== undefined) setHasCookie(Boolean(data.hasCookie))
         // A single shared file opens straight away if in course mode.
         if (isCourse && !link.isFolder && data.items[0]) setCurrent(data.items[0])
       })
@@ -866,7 +874,7 @@ function LessonView({ link, vi, onBack, onEdit, editing, onEdited, onCloseEdit, 
 
   function downloadHere() {
     const target = path.length > 1 ? { folderId: folder.id ?? undefined, rk: folder.rk ?? undefined, name: folder.name } : undefined
-    startCourseDownload(link.id, target)
+    startCourseDownload(link.id, target, startDownload)
       .then(() => showSnackbar(vi ? 'Đang tải xuống… (file ZIP lớn có thể mất một lúc mới bắt đầu)' : 'Downloading… (a large ZIP can take a moment to start)'))
       .catch((err) => showSnackbar(errorText(err, vi ? 'Không tải được' : 'Could not download')))
   }
@@ -938,6 +946,17 @@ function LessonView({ link, vi, onBack, onEdit, editing, onEdited, onCloseEdit, 
           <Download className="mr-1.5 h-4 w-4" />{isCourse ? (path.length > 1 ? (vi ? 'Tải chương này' : 'Download chapter') : vi ? 'Tải khóa học' : 'Download course') : (path.length > 1 ? (vi ? 'Tải thư mục này' : 'Download folder') : vi ? 'Tải tất cả (ZIP)' : 'Download all (ZIP)')}
         </Button>
         <Button size="sm" variant="ghost" onClick={() => setSaveOpen(true)}><HardDriveDownload className="mr-1.5 h-4 w-4" />{vi ? 'Lưu vào Drive' : 'Save to Drive'}</Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => setCookieOpen(true)}
+          className={cn(hasCookie && 'text-emerald-700 dark:text-emerald-400 font-medium')}
+          title={vi ? 'Cấu hình Cookie Google Drive cho video bảo vệ quyền riêng tư' : 'Configure Google Drive Cookie for protected videos'}
+        >
+          <Cookie className="mr-1.5 h-4 w-4" />
+          <span className="hidden sm:inline">{vi ? 'Cookie Drive' : 'Drive Cookie'}</span>
+          {hasCookie && <span className="ml-1 h-1.5 w-1.5 rounded-full bg-emerald-500" />}
+        </Button>
         <a href={link.url} target="_blank" rel="noreferrer" className="inline-flex h-8 items-center rounded-full px-3 text-xs text-[#0b57d0] hover:bg-[#0b57d0]/10 dark:text-[#a8c7fa]">
           <ExternalLink className="mr-1.5 h-4 w-4" />Google Drive
         </a>
@@ -947,18 +966,42 @@ function LessonView({ link, vi, onBack, onEdit, editing, onEdited, onCloseEdit, 
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4 sm:px-6 xl:flex-row xl:overflow-hidden">
           {current ? (
             <div className="min-w-0 xl:flex-1 xl:overflow-y-auto">
-              <LessonPlayer key={current.id} lesson={current} vi={vi} onPosition={(seconds) => saveProgress(current.id, { positionSeconds: seconds })} onEnded={() => saveProgress(current.id, { completed: true })} />
+              <LessonPlayer
+                key={current.id}
+                lesson={current}
+                vi={vi}
+                accountEmail={account?.email}
+                hasCookie={hasCookie}
+                onConfigureCookie={() => setCookieOpen(true)}
+                onPosition={(seconds) => saveProgress(current.id, { positionSeconds: seconds })}
+                onEnded={() => saveProgress(current.id, { completed: true })}
+              />
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <h2 className="min-w-0 flex-1 truncate text-base font-medium text-slate-800 dark:text-slate-100" title={current.name}>{current.name}</h2>
                 <Button size="sm" variant={items?.find((item) => item.id === current.id)?.completed ? 'tonal' : 'outline'} onClick={() => saveProgress(current.id, { completed: !items?.find((item) => item.id === current.id)?.completed })}>
                   <CheckCircle2 className="mr-1.5 h-4 w-4" />
                   {items?.find((item) => item.id === current.id)?.completed ? (vi ? 'Đã học' : 'Done') : vi ? 'Đánh dấu đã học' : 'Mark as done'}
                 </Button>
-                {current.streamUrl ? (
-                  <a href={lessonDownloadUrl(current.streamUrl, current.name)} className="inline-flex h-8 items-center rounded-full border border-[#747775]/60 px-3.5 text-xs text-slate-800 hover:bg-[#f0f4f9] dark:border-[#8e918f]/60 dark:text-slate-100 dark:hover:bg-[#282a2c]">
+                {current.canDownload && current.streamUrl ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      startDownload(lessonDownloadUrl(current.streamUrl!, current.name), current.name, { auth: false })
+                    }}
+                    className="inline-flex h-8 items-center rounded-full border border-[#747775]/60 px-3.5 text-xs text-slate-800 hover:bg-[#f0f4f9] dark:border-[#8e918f]/60 dark:text-slate-100 dark:hover:bg-[#282a2c] cursor-pointer"
+                  >
                     <Download className="mr-1.5 h-4 w-4" />{vi ? 'Tải bài này' : 'Download'}
-                  </a>
+                  </button>
                 ) : null}
+                <a
+                  href={current.webViewLink ? (account?.email ? `${current.webViewLink}${current.webViewLink.includes('?') ? '&' : '?'}authuser=${encodeURIComponent(account.email)}` : current.webViewLink) : `https://drive.google.com/file/d/${current.id}/view${account?.email ? `?authuser=${encodeURIComponent(account.email)}` : ''}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex h-8 items-center rounded-full border border-[#747775]/60 px-3.5 text-xs font-medium text-[#0b57d0] hover:bg-[#0b57d0]/10 dark:border-[#8e918f]/60 dark:text-[#a8c7fa] cursor-pointer"
+                  title={vi ? 'Mở bài học này trong tab mới trên Google Drive' : 'Open this lesson in a new tab on Google Drive'}
+                >
+                  <ExternalLink className="mr-1.5 h-4 w-4" />{vi ? 'Xem trên Google Drive' : 'Drive'}
+                </a>
                 {nextLesson ? (
                   <Button size="sm" onClick={() => setCurrent(nextLesson)}>
                     <SkipForward className="mr-1.5 h-4 w-4" />{vi ? 'Bài tiếp' : 'Next'}
@@ -1088,14 +1131,17 @@ function LessonView({ link, vi, onBack, onEdit, editing, onEdited, onCloseEdit, 
                                   <Icon className={cn('h-10 w-10', visual.color)} />
                                 )}
                                 {fileItem.streamUrl ? (
-                                  <a
-                                    href={lessonDownloadUrl(fileItem.streamUrl, fileItem.name)}
-                                    onClick={(e) => e.stopPropagation()}
-                                    className="absolute right-2 top-2 rounded-full bg-white/90 p-1.5 text-slate-600 shadow-sm opacity-0 group-hover:opacity-100 hover:bg-white hover:text-[#0b57d0] dark:bg-[#1e1f20]/90 dark:text-slate-300 dark:hover:bg-[#282a2c] transition"
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      startDownload(lessonDownloadUrl(fileItem.streamUrl!, fileItem.name), fileItem.name, { auth: false })
+                                    }}
+                                    className="absolute right-2 top-2 rounded-full bg-white/90 p-1.5 text-slate-600 shadow-sm opacity-0 group-hover:opacity-100 hover:bg-white hover:text-[#0b57d0] dark:bg-[#1e1f20]/90 dark:text-slate-300 dark:hover:bg-[#282a2c] transition cursor-pointer"
                                     title={vi ? 'Tải tệp này' : 'Download file'}
                                   >
                                     <Download className="h-3.5 w-3.5" />
-                                  </a>
+                                  </button>
                                 ) : null}
                               </div>
                               <div className="flex items-center gap-2 border-t border-slate-100 p-2.5 dark:border-slate-800/80">
@@ -1174,14 +1220,17 @@ function LessonView({ link, vi, onBack, onEdit, editing, onEdited, onCloseEdit, 
                                       <Eye className="h-4 w-4" />
                                     </button>
                                     {item.streamUrl ? (
-                                      <a
-                                        href={lessonDownloadUrl(item.streamUrl, item.name)}
-                                        onClick={(e) => e.stopPropagation()}
-                                        className="p-1 rounded-full text-slate-400 hover:text-[#0b57d0] hover:bg-slate-100 dark:hover:bg-[#282a2c]"
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          startDownload(lessonDownloadUrl(item.streamUrl!, item.name), item.name, { auth: false })
+                                        }}
+                                        className="p-1 rounded-full text-slate-400 hover:text-[#0b57d0] hover:bg-slate-100 dark:hover:bg-[#282a2c] cursor-pointer"
                                         title={vi ? 'Tải tệp' : 'Download'}
                                       >
                                         <Download className="h-4 w-4" />
-                                      </a>
+                                      </button>
                                     ) : null}
                                   </>
                                 )}
@@ -1212,6 +1261,24 @@ function LessonView({ link, vi, onBack, onEdit, editing, onEdited, onCloseEdit, 
           setAccount(updated.account)
         }}
       />
+      {cookieOpen && (
+        <DriveCookieModal
+          linkId={link.id}
+          accountId={account?.id}
+          accountEmail={account?.email}
+          hasCookie={hasCookie}
+          vi={vi}
+          onClose={() => setCookieOpen(false)}
+          onSaved={(newHasCookie) => {
+            setHasCookie(newHasCookie)
+            if (current) {
+              const c = current
+              setCurrent(null)
+              setTimeout(() => setCurrent(c), 50)
+            }
+          }}
+        />
+      )}
       <FolderFilePreviewModal
         file={previewItem}
         files={items ? items.filter((i) => !i.isFolder) : []}
@@ -1239,6 +1306,7 @@ export function FolderFilePreviewModal({
   onNavigate: (file: Lesson) => void
 }) {
   if (!file) return null
+  const { startDownload } = useDownload()
   const [useGooglePreview, setUseGooglePreview] = useState(false)
   useEffect(() => {
     setUseGooglePreview(false)
@@ -1280,13 +1348,14 @@ export function FolderFilePreviewModal({
               </button>
             )}
             {allowDownload && file.streamUrl ? (
-              <a
-                href={lessonDownloadUrl(file.streamUrl, file.name)}
-                className="inline-flex h-8 items-center gap-1.5 rounded-full border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 shadow-xs hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+              <button
+                type="button"
+                onClick={() => startDownload(lessonDownloadUrl(file.streamUrl!, file.name), file.name, { auth: false })}
+                className="inline-flex h-8 items-center gap-1.5 rounded-full border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 shadow-xs hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 cursor-pointer"
               >
                 <Download className="h-3.5 w-3.5 text-[#0b57d0] dark:text-[#a8c7fa]" />
                 <span className="hidden sm:inline">{vi ? 'Tải xuống' : 'Download'}</span>
-              </a>
+              </button>
             ) : null}
             {file.webViewLink ? (
               <a
@@ -1335,15 +1404,18 @@ export function FolderFilePreviewModal({
 
           <div className="flex h-full w-full items-center justify-center overflow-auto">
             {src && file.mimeType.startsWith('video/') && !useGooglePreview ? (
-              <video
-                controls
-                autoPlay
-                src={src}
-                onError={() => {
-                  if (file.previewUrl) setUseGooglePreview(true)
-                }}
-                className="max-h-[75vh] w-full rounded-xl bg-black shadow-md"
-              />
+              <div className="flex flex-col items-center w-full max-h-[75vh]">
+                <StreamProgressBar streamUrl={file.streamUrl || src} className="w-full mb-2" />
+                <video
+                  controls
+                  autoPlay
+                  src={src}
+                  onError={() => {
+                    if (file.previewUrl) setUseGooglePreview(true)
+                  }}
+                  className="max-h-[70vh] w-full rounded-xl bg-black shadow-md"
+                />
+              </div>
             ) : file.mimeType.startsWith('video/') && file.previewUrl ? (
               <iframe
                 src={file.previewUrl}
@@ -1365,9 +1437,13 @@ export function FolderFilePreviewModal({
                 <Icon className={cn('mx-auto h-12 w-12 mb-3', visual.color)} />
                 <p>{vi ? 'Trình duyệt không xem trực tiếp được loại tệp này.' : 'This file type cannot be previewed directly.'}</p>
                 {allowDownload && src ? (
-                  <a href={lessonDownloadUrl(src, file.name)} className="mt-3 inline-block font-medium text-[#0b57d0] hover:underline dark:text-[#a8c7fa]">
+                  <button
+                    type="button"
+                    onClick={() => startDownload(lessonDownloadUrl(src, file.name), file.name, { auth: false })}
+                    className="mt-3 inline-block font-medium text-[#0b57d0] hover:underline dark:text-[#a8c7fa] cursor-pointer"
+                  >
                     {vi ? 'Tải tệp xuống' : 'Download file'}
-                  </a>
+                  </button>
                 ) : null}
               </div>
             )}
@@ -1378,7 +1454,23 @@ export function FolderFilePreviewModal({
   )
 }
 
-function LessonPlayer({ lesson, vi, onPosition, onEnded }: { lesson: Lesson; vi: boolean; onPosition: (seconds: number) => void; onEnded: () => void }) {
+function LessonPlayer({
+  lesson,
+  vi,
+  accountEmail,
+  hasCookie,
+  onConfigureCookie,
+  onPosition,
+  onEnded,
+}: {
+  lesson: Lesson
+  vi: boolean
+  accountEmail?: string
+  hasCookie?: boolean
+  onConfigureCookie?: () => void
+  onPosition: (seconds: number) => void
+  onEnded: () => void
+}) {
   const [playerMode, setPlayerMode] = useState<'hcdrive' | 'google'>('hcdrive')
   const [videoError, setVideoError] = useState(false)
   const lastSaved = useRef(lesson.positionSeconds)
@@ -1386,6 +1478,30 @@ function LessonPlayer({ lesson, vi, onPosition, onEnded }: { lesson: Lesson; vi:
   const onPositionRef = useRef(onPosition)
   onPositionRef.current = onPosition
   const src = lesson.streamUrl ? `${API_URL}${lesson.streamUrl}` : null
+
+  const authedViewUrl = useMemo(() => {
+    const base = lesson.webViewLink || `https://drive.google.com/file/d/${lesson.id}/view`
+    if (!accountEmail) return base
+    try {
+      const url = new URL(base)
+      url.searchParams.set('authuser', accountEmail)
+      return url.toString()
+    } catch {
+      return `${base}${base.includes('?') ? '&' : '?'}authuser=${encodeURIComponent(accountEmail)}`
+    }
+  }, [lesson.webViewLink, lesson.id, accountEmail])
+
+  const authedPreviewUrl = useMemo(() => {
+    const base = lesson.previewUrl || `https://drive.google.com/file/d/${lesson.id}/preview`
+    if (!accountEmail) return base
+    try {
+      const url = new URL(base)
+      url.searchParams.set('authuser', accountEmail)
+      return url.toString()
+    } catch {
+      return `${base}${base.includes('?') ? '&' : '?'}authuser=${encodeURIComponent(accountEmail)}`
+    }
+  }, [lesson.previewUrl, lesson.id, accountEmail])
 
   // Leaving the lesson keeps where it stopped (the component is keyed by lesson, so this runs on switch).
   useEffect(() => () => {
@@ -1438,24 +1554,36 @@ function LessonPlayer({ lesson, vi, onPosition, onEnded }: { lesson: Lesson; vi:
     if (playerMode === 'google' || (!src && lesson.previewUrl)) {
       return (
         <div className="space-y-2">
-          <div className="flex items-center justify-between gap-2 px-1 text-xs text-slate-500 dark:text-slate-400">
+          <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-slate-500 dark:text-slate-400">
             <span className="flex items-center gap-1.5 font-medium">
               <span className="inline-block h-2 w-2 rounded-full bg-amber-500" />
-              {vi ? 'Trình phát Google Drive (Yêu cầu tài khoản có quyền)' : 'Google Drive Player (Requires authorized account)'}
+              {vi ? 'Khung nhúng Google Drive' : 'Google Drive Embedded Player'}
             </span>
-            {src && (
-              <button
-                type="button"
-                onClick={() => { setVideoError(false); setPlayerMode('hcdrive') }}
-                className="flex items-center gap-1 rounded-md px-2 py-1 font-medium text-[#0b57d0] hover:bg-blue-50 dark:text-[#a8c7fa] dark:hover:bg-blue-950/40 transition cursor-pointer"
+            <div className="flex items-center gap-2">
+              <a
+                href={authedViewUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center gap-1 rounded-md px-2 py-1 font-semibold text-[#0b57d0] hover:bg-blue-50 dark:text-[#a8c7fa] dark:hover:bg-blue-950/40 transition cursor-pointer"
+                title={vi ? 'Mở trong tab mới nếu khung nhúng bị chặn quyền hoặc yêu cầu đăng nhập' : 'Open in new tab if embed is blocked or asks to sign in'}
               >
-                <RefreshCw className="h-3 w-3" />
-                {vi ? 'Dùng Trình phát HCDrive (Server Cache)' : 'Use HCDrive Player (Server Cache)'}
-              </button>
-            )}
+                <ExternalLink className="h-3.5 w-3.5" />
+                {vi ? 'Mở tab mới trên Google Drive' : 'Open in new tab on Drive'}
+              </a>
+              {src && (
+                <button
+                  type="button"
+                  onClick={() => { setVideoError(false); setPlayerMode('hcdrive') }}
+                  className="flex items-center gap-1 rounded-md px-2 py-1 font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800 transition cursor-pointer"
+                >
+                  <RefreshCw className="h-3 w-3" />
+                  {vi ? 'Dùng Trình phát HCDrive' : 'Use HCDrive Player'}
+                </button>
+              )}
+            </div>
           </div>
           <iframe
-            src={lesson.previewUrl || undefined}
+            src={authedPreviewUrl || undefined}
             title={lesson.name}
             allow="autoplay; fullscreen"
             allowFullScreen
@@ -1468,17 +1596,44 @@ function LessonPlayer({ lesson, vi, onPosition, onEnded }: { lesson: Lesson; vi:
     if (src && !videoError) {
       return (
         <div className="space-y-2">
-          {lesson.previewUrl && (
-            <div className="flex items-center justify-between gap-2 px-1 text-xs text-slate-500 dark:text-slate-400">
-              <span className="flex items-center gap-1.5 font-medium">
-                <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
-                {vi ? 'Trình phát HCDrive (Bypass & Cache 30 phút)' : 'HCDrive Player (Bypass & 30-min Cache)'}
-                {isBuffering && (
-                  <span className="text-[11px] text-amber-500 animate-pulse">
-                    ({vi ? 'Đang chuẩn bị stream...' : 'Buffering stream...'})
-                  </span>
-                )}
-              </span>
+          <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-slate-500 dark:text-slate-400">
+            <span className="flex items-center gap-1.5 font-medium">
+              <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
+              {vi ? 'Trình phát HCDrive' : 'HCDrive Player'}
+              {isBuffering && (
+                <span className="text-[11px] text-amber-500 animate-pulse">
+                  ({vi ? 'Đang chuẩn bị stream...' : 'Buffering stream...'})
+                </span>
+              )}
+            </span>
+            <div className="flex items-center gap-2">
+              {onConfigureCookie && (
+                <button
+                  type="button"
+                  onClick={onConfigureCookie}
+                  className={cn(
+                    'flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition cursor-pointer',
+                    hasCookie
+                      ? 'text-emerald-700 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950/40'
+                      : 'text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800'
+                  )}
+                  title={vi ? 'Cấu hình Cookie Google Drive cho video bảo vệ riêng tư' : 'Configure Google Drive Cookie for protected videos'}
+                >
+                  <Cookie className="h-3 w-3" />
+                  <span>{vi ? 'Cookie' : 'Cookie'}</span>
+                  {hasCookie && <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />}
+                </button>
+              )}
+              <a
+                href={authedViewUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center gap-1 rounded-md px-2 py-1 font-medium text-[#0b57d0] hover:bg-blue-50 dark:text-[#a8c7fa] dark:hover:bg-blue-950/40 transition cursor-pointer"
+                title={vi ? 'Mở trực tiếp trên Google Drive' : 'Open directly on Google Drive'}
+              >
+                <ExternalLink className="h-3 w-3" />
+                {vi ? 'Xem trên Google Drive' : 'Watch on Google Drive'}
+              </a>
               <button
                 type="button"
                 onClick={() => setPlayerMode('google')}
@@ -1489,46 +1644,81 @@ function LessonPlayer({ lesson, vi, onPosition, onEnded }: { lesson: Lesson; vi:
                 {vi ? 'Đổi sang Trình phát Google' : 'Switch to Google Player'}
               </button>
             </div>
-          )}
+          </div>
           <video ref={(node) => { mediaRef.current = node }} {...mediaProps} className="aspect-video w-full rounded-xl bg-black shadow-md" />
+          <StreamProgressBar streamUrl={lesson.streamUrl} isBuffering={isBuffering} vi={vi} />
         </div>
       )
     }
 
     // Video error with fallback
     return (
-      <div className="rounded-xl border border-slate-200 p-6 text-center text-sm text-slate-600 dark:border-slate-800 dark:text-slate-300">
-        <p className="font-medium text-slate-800 dark:text-slate-200">
-          {vi ? 'Không thể phát video ngay hoặc video đang được máy chủ tải vào bộ đệm cache.' : 'Unable to stream video or file is being cached on server.'}
+      <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-6 text-center text-sm text-slate-700 dark:border-amber-900/40 dark:bg-amber-950/20 dark:text-slate-200">
+        <StreamProgressBar streamUrl={lesson.streamUrl} isBuffering={false} vi={vi} className="mb-4" />
+        <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-amber-100 text-amber-600 dark:bg-amber-900/50 dark:text-amber-400">
+          <ExternalLink className="h-6 w-6" />
+        </div>
+        <p className="font-semibold text-slate-900 dark:text-slate-100">
+          {vi ? 'Video được bảo vệ quyền xem riêng tư trên Google Drive' : 'Video Protected with View-only Rights on Google Drive'}
         </p>
-        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-          {vi ? 'Máy chủ HCDrive đang tải tệp về server và lưu trữ 30 phút để phát mượt mà không giới hạn quyền.' : 'HCDrive server is caching the file for 30 minutes to enable smooth unrestricted playback.'}
+        <p className="mt-1.5 max-w-lg mx-auto text-xs text-slate-600 dark:text-slate-300">
+          {vi
+            ? 'Chủ sở hữu khóa học đã khóa quyền tải xuống & sao chép đối với người xem. Trình duyệt cũng chặn cookie đăng nhập Google trong khung nhúng (iframe) nên không thể phát video trực tiếp tại đây.'
+            : 'The course owner has disabled download and copy permissions. Web browsers also block Google authentication cookies in embedded iframes.'}
         </p>
-        <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+        <p className="mt-1 text-xs font-medium text-[#0b57d0] dark:text-[#a8c7fa]">
+          {accountEmail
+            ? (vi ? `Tài khoản Google có quyền xem: ${accountEmail}` : `Authorized Google account: ${accountEmail}`)
+            : (vi ? 'Vui lòng mở bằng tài khoản Google đã được cấp quyền truy cập.' : 'Please open with the authorized Google account.')}
+        </p>
+
+        <div className="mt-5 flex flex-wrap items-center justify-center gap-2.5">
+          {onConfigureCookie && (
+            <button
+              type="button"
+              onClick={onConfigureCookie}
+              className="inline-flex items-center gap-2 rounded-xl bg-[#0b57d0] px-5 py-2.5 text-xs font-semibold text-white shadow-sm hover:bg-[#0b57d0]/90 transition cursor-pointer"
+            >
+              <Cookie className="h-4 w-4" />
+              <span>
+                {hasCookie
+                  ? (vi ? 'Cập nhật Cookie Google Drive' : 'Update Google Drive Cookie')
+                  : (vi ? 'Cấu hình Cookie Google Drive để phát trực tiếp' : 'Configure Google Drive Cookie for Direct Stream')}
+              </span>
+            </button>
+          )}
+
+          <a
+            href={authedViewUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-xs font-semibold text-slate-700 shadow-xs hover:bg-slate-50 dark:border-slate-700 dark:bg-[#1e1f20] dark:text-slate-300 dark:hover:bg-slate-800 transition cursor-pointer"
+          >
+            <ExternalLink className="h-4 w-4" />
+            {vi ? 'Mở xem trực tiếp trên Google Drive' : 'Open & Watch on Google Drive'}
+          </a>
+
+          <button
+            type="button"
+            onClick={() => { setVideoError(false); setPlayerMode('google') }}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-xs font-medium text-slate-700 shadow-xs hover:bg-slate-50 dark:border-slate-700 dark:bg-[#1e1f20] dark:text-slate-300 dark:hover:bg-slate-800 transition cursor-pointer"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            {vi ? 'Xem thử trong khung nhúng (iFrame)' : 'Try embedded Google iFrame'}
+          </button>
+
           <button
             type="button"
             onClick={() => {
               setVideoError(false)
               setPlayerMode('hcdrive')
-              if (mediaRef.current) {
-                mediaRef.current.load()
-              }
+              if (mediaRef.current) mediaRef.current.load()
             }}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-[#0b57d0] px-4 py-2 text-xs font-medium text-white hover:bg-[#0b57d0]/90 transition cursor-pointer"
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-[#1e1f20] dark:text-slate-300 cursor-pointer"
           >
             <RefreshCw className="h-3.5 w-3.5" />
             {vi ? 'Thử lại phát HCDrive' : 'Retry HCDrive Stream'}
           </button>
-          {lesson.previewUrl && (
-            <button
-              type="button"
-              onClick={() => { setVideoError(false); setPlayerMode('google') }}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800 transition cursor-pointer"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-              {vi ? 'Thử Trình phát Google Drive' : 'Try Google Drive Player'}
-            </button>
-          )}
         </div>
       </div>
     )

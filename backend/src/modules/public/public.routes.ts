@@ -10,6 +10,7 @@ import { cachedThumbnailLink, forgetThumbnailLink, rememberThumbnailLink } from 
 import { googlePausedFor, noteGoogleError } from '../../utils/google-backoff.js'
 import { getAccountProxyUrl, getUndiciDispatcher } from '../../utils/proxy.js'
 import { getAuthedGoogleClient, getGoogleDriveClient } from '../google/google.service.js'
+import { getCacheProgress } from '../../services/temp-cache.service.js'
 
 export const publicRouter = Router()
 
@@ -89,6 +90,15 @@ publicRouter.get('/files/:token/preview', async (req, res, next) => {
   try {
     const file = await findSharedFile(String(req.params.token))
     return streamProviderFile(file, req.headers.range, res, { disposition: 'inline' })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+publicRouter.get('/files/:token/cache-progress', async (req, res, next) => {
+  try {
+    const file = await findSharedFile(String(req.params.token))
+    return res.json(getCacheProgress(file.providerFileId || file.id))
   } catch (error) {
     return next(error)
   }

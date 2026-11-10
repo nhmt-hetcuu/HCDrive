@@ -4,6 +4,7 @@ import {
   Check,
   CheckCircle2,
   Clock,
+  Cookie,
   Copy,
   ExternalLink,
   Folder,
@@ -30,8 +31,16 @@ import { cn } from '@/lib/utils'
  * Downloads the course (or one chapter) as a ZIP. The server hands out a signed URL, so the browser saves
  * the file as it streams instead of holding gigabytes of video in memory first.
  */
-export async function startCourseDownload(linkId: string, chapter?: { folderId?: string; rk?: string; name?: string }) {
+export async function startCourseDownload(
+  linkId: string,
+  chapter?: { folderId?: string; rk?: string; name?: string },
+  customDownload?: (url: string, filename: string, options?: { auth?: boolean }) => Promise<void>
+) {
   const data = await apiFetch<{ path: string }>(`/library/${linkId}/download-link`, { method: 'POST', body: JSON.stringify(chapter ?? {}) })
+  if (customDownload) {
+    await customDownload(data.path, chapter?.name ? `${chapter.name}.zip` : 'course.zip', { auth: false })
+    return
+  }
   const anchor = document.createElement('a')
   anchor.href = `${API_URL}${data.path}`
   anchor.rel = 'noopener'
@@ -43,8 +52,16 @@ export async function startCourseDownload(linkId: string, chapter?: { folderId?:
 }
 
 /** Downloads a shared course without requiring account ownership of the saved link. */
-export async function startSharedCourseDownload(token: string, chapter?: { folderId?: string; rk?: string; name?: string }) {
+export async function startSharedCourseDownload(
+  token: string,
+  chapter?: { folderId?: string; rk?: string; name?: string },
+  customDownload?: (url: string, filename: string, options?: { auth?: boolean }) => Promise<void>
+) {
   const data = await apiFetch<{ path: string }>(`/library/shared/${encodeURIComponent(token)}/download-link`, { method: 'POST', body: JSON.stringify(chapter ?? {}) })
+  if (customDownload) {
+    await customDownload(data.path, chapter?.name ? `${chapter.name}.zip` : 'course.zip', { auth: false })
+    return
+  }
   const anchor = document.createElement('a')
   anchor.href = `${API_URL}${data.path}`
   anchor.rel = 'noopener'
@@ -56,7 +73,10 @@ export async function startSharedCourseDownload(token: string, chapter?: { folde
 
 /** One lesson as a file: the signed stream URL, asked to download instead of play. */
 export function lessonDownloadUrl(streamUrl: string, name: string) {
-  return `${API_URL}${streamUrl}${streamUrl.includes('?') ? '&' : '?'}download=${encodeURIComponent(name)}`
+  const base = streamUrl.startsWith('http://') || streamUrl.startsWith('https://')
+    ? streamUrl
+    : `${API_URL}${streamUrl.startsWith('/') ? '' : '/'}${streamUrl}`
+  return `${base}${base.includes('?') ? '&' : '?'}download=${encodeURIComponent(name)}`
 }
 
 type CourseRef = { id: string; title: string; teacher: string; shared: boolean; isFolder: boolean }
@@ -355,7 +375,16 @@ export function SaveToDriveModal({
                   ? `${job.copied} tệp, ${job.folders} thư mục → ${job.accountEmail}`
                   : `${job.copied} files, ${job.folders} folders → ${job.accountEmail}`}
               </p>
-              {job.skipped ? <p className="mt-1 text-amber-700 dark:text-amber-300">{vi ? `${job.skipped} tệp không thể sao chép, đã bỏ qua.` : `${job.skipped} files could not be copied, skipped.`}</p> : null}
+              {job.skipped ? (
+                <div className="mt-2 rounded-lg bg-amber-50 p-2.5 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+                  <p className="font-semibold">{vi ? `${job.skipped} tệp không thể sao chép (đã bỏ qua).` : `${job.skipped} files could not be copied (skipped).`}</p>
+                  <p className="mt-1 opacity-90">
+                    {vi
+                      ? 'Lý do: Chủ sở hữu link đã khóa quyền "Người xem không thể tải xuống, in hoặc sao chép" trên Google Drive. Vì vậy Google cấm tạo bản sao sang tài khoản khác. Bạn có thể mở xem trực tiếp video bằng tài khoản Google được cấp quyền.'
+                      : 'Reason: Owner disabled "Download, print, and copy for commenters and viewers". Google rejects copying. You can stream or watch directly with the authorized Google account.'}
+                  </p>
+                </div>
+              ) : null}
               {job.failed ? <p className="mt-1 text-red-600 dark:text-red-400">{vi ? `${job.failed} tệp chép lỗi; bấm lưu lại để thử lần nữa.` : `${job.failed} files failed; save again to retry.`}</p> : null}
               {job.current ? <p className="mt-1 truncate text-slate-500">{job.current}</p> : null}
               {job.error ? <p className="mt-1 break-all text-red-600 dark:text-red-400">{job.error}</p> : null}
@@ -642,4 +671,162 @@ export function CourseDetailsModal({
     </DummyModal>
   )
 }
+
+export function DriveCookieModal({
+  linkId,
+  accountId,
+  accountEmail,
+  hasCookie,
+  vi,
+  onClose,
+  onSaved,
+}: {
+  linkId?: string
+  accountId?: string
+  accountEmail?: string
+  hasCookie?: boolean
+  vi: boolean
+  onClose: () => void
+  onSaved?: (hasCookie: boolean) => void
+}) {
+  const { showSnackbar } = useSnackbar()
+  const [cookie, setCookie] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [showGuide, setShowGuide] = useState(false)
+
+  async function handleSave(e?: React.FormEvent) {
+    if (e) e.preventDefault()
+    setSaving(true)
+    try {
+      let resHasCookie = false
+      if (linkId) {
+        const res = await apiFetch<{ success: boolean; hasCookie: boolean }>(`/library/${linkId}/cookie`, {
+          method: 'POST',
+          body: JSON.stringify({ cookie: cookie.trim() }),
+        })
+        resHasCookie = res.hasCookie
+      } else if (accountId) {
+        const res = await apiFetch<{ status: string; hasCookie: boolean }>(`/connected-accounts/${accountId}/cookie`, {
+          method: 'PATCH',
+          body: JSON.stringify({ cookie: cookie.trim() }),
+        })
+        resHasCookie = res.hasCookie
+      }
+
+      showSnackbar(
+        resHasCookie
+          ? (vi ? 'Đã lưu Cookie Google Drive (đã mã hóa an toàn)' : 'Google Drive Cookie saved (securely encrypted)')
+          : (vi ? 'Đã xóa Cookie' : 'Cookie removed')
+      )
+      onSaved?.(resHasCookie)
+      onClose()
+    } catch (err) {
+      showSnackbar(errorText(err, vi ? 'Không lưu được cookie' : 'Failed to save cookie'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <DummyModal
+      open={true}
+      title={
+        <span className="flex items-center gap-2">
+          <Cookie className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+          <span>{vi ? 'Cấu hình Cookie Google Drive' : 'Configure Google Drive Cookie'}</span>
+        </span>
+      }
+      description={
+        vi
+          ? 'Sử dụng cookie tài khoản Google Drive để máy chủ HCDrive tải và stream trực tiếp các video bị khóa quyền tải hoặc bảo vệ quyền xem riêng tư.'
+          : 'Use Google Drive session cookie to stream view-only protected files directly through HCDrive server buffer.'
+      }
+      onClose={onClose}
+    >
+      <form onSubmit={handleSave} className="space-y-4">
+        {accountEmail && (
+          <div className="flex items-center gap-2 rounded-lg bg-blue-50/70 p-2.5 text-xs text-blue-900 dark:bg-blue-950/40 dark:text-blue-200">
+            <Mail className="h-4 w-4 shrink-0 text-[#0b57d0] dark:text-[#a8c7fa]" />
+            <span className="truncate">
+              {vi ? 'Tài khoản Google liên kết:' : 'Linked Google account:'} <strong>{accountEmail}</strong>
+            </span>
+          </div>
+        )}
+
+        {hasCookie && (
+          <div className="flex items-center justify-between rounded-lg bg-emerald-50/80 p-2.5 text-xs text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
+            <span className="flex items-center gap-1.5 font-medium">
+              <Check className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+              {vi ? 'Tài khoản này hiện đã có Cookie bảo mật trên server' : 'This account currently has a secure Cookie stored on server'}
+            </span>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => {
+                setCookie('')
+                handleSave()
+              }}
+              className="font-semibold text-red-600 hover:underline dark:text-red-400 cursor-pointer"
+            >
+              {vi ? 'Xóa Cookie' : 'Clear Cookie'}
+            </button>
+          </div>
+        )}
+
+        <div>
+          <label className="block text-xs font-semibold text-slate-700 dark:text-slate-200 mb-1">
+            {vi ? 'Dán Cookie Google Drive' : 'Paste Google Drive Cookie'}
+          </label>
+          <textarea
+            value={cookie}
+            onChange={(e) => setCookie(e.target.value)}
+            rows={4}
+            placeholder="SID=...; HSID=...; SSID=...; OSID=... hoặc copy toàn bộ chuỗi header Cookie trong DevTools Network"
+            className="w-full rounded-xl border border-slate-200 bg-white p-3 font-mono text-[11px] text-slate-900 outline-none focus:border-[#0b57d0] focus:ring-2 focus:ring-[#0b57d0]/20 dark:border-slate-800 dark:bg-[#131314] dark:text-slate-100 placeholder:text-slate-400"
+          />
+          <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+            {vi
+              ? 'Cookie được mã hóa AES-256-GCM trước khi lưu và chỉ dùng để yêu cầu stream từ Google Drive.'
+              : 'Cookie is AES-256-GCM encrypted before storage and used exclusively to request streams from Google Drive.'}
+          </p>
+        </div>
+
+        {/* Instructions Toggle */}
+        <div className="rounded-xl border border-slate-200/80 bg-slate-50/60 p-3 dark:border-slate-800 dark:bg-[#1e1f20]/50">
+          <button
+            type="button"
+            onClick={() => setShowGuide(!showGuide)}
+            className="flex w-full items-center justify-between text-xs font-medium text-slate-700 dark:text-slate-300 cursor-pointer"
+          >
+            <span className="flex items-center gap-1.5 text-[#0b57d0] dark:text-[#a8c7fa]">
+              <Info className="h-3.5 w-3.5" />
+              {vi ? 'Cách lấy Cookie từ trình duyệt của bạn (1 phút)' : 'How to get Cookie from browser (1 min)'}
+            </span>
+            <span className="text-[11px] text-slate-400">{showGuide ? (vi ? 'Thu gọn' : 'Hide') : (vi ? 'Xem hướng dẫn' : 'Show guide')}</span>
+          </button>
+          {showGuide && (
+            <div className="mt-2.5 space-y-1.5 text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed border-t border-slate-200/60 pt-2 dark:border-slate-800">
+              <p>1. Mở <strong>drive.google.com</strong> trên trình duyệt bạn đã đăng nhập và xem được video/khóa học.</p>
+              <p>2. Nhấn phím <strong>F12</strong> (hoặc Chuột phải chọn <em>Kiểm tra / Inspect</em>) rồi chuyển sang tab <strong>Network</strong> (Mạng).</p>
+              <p>3. Tải lại trang (F5) hoặc bấm vào một tệp/thư mục bất kỳ.</p>
+              <p>4. Chọn một yêu cầu bất kỳ gửi đến <code>drive.google.com</code>, trong bảng bên phải tìm mục <strong>Request Headers</strong>.</p>
+              <p>5. Copy toàn bộ giá trị sau <code>cookie:</code> (hoặc copy cả dòng) và dán vào ô trên.</p>
+            </div>
+          )}
+        </div>
+
+        <div className="flex justify-end gap-2 pt-2">
+          <Button type="button" variant="outline" size="sm" onClick={onClose} disabled={saving}>
+            {vi ? 'Đóng' : 'Close'}
+          </Button>
+          <Button type="submit" size="sm" disabled={saving || (!cookie.trim() && !hasCookie)} className="gap-1.5 bg-[#0b57d0] hover:bg-[#0b57d0]/90 text-white">
+            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+            <span>{vi ? 'Lưu Cookie' : 'Save Cookie'}</span>
+          </Button>
+        </div>
+      </form>
+    </DummyModal>
+  )
+}
+
 
