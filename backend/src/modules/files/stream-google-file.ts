@@ -6,6 +6,7 @@ import { prisma } from '../../config/prisma.js'
 import { getAuthedGoogleClient, getGoogleDriveClient, getAccountCookie } from '../google/google.service.js'
 import { getAccountProxyUrl, getUndiciDispatcher } from '../../utils/proxy.js'
 import { streamCachedOrFetch } from '../../services/temp-cache.service.js'
+import { resolveGoogleVideoStream } from './gdrive-stream-helper.js'
 
 type FileWithAccount = File & { connectedAccount: ConnectedAccount }
 type StreamOptions = { disposition?: 'inline' | 'attachment'; exportMimeType?: string; exportExtension?: string }
@@ -48,18 +49,44 @@ export async function attemptGoogleBypassStream(
   range?: string
 ): Promise<globalThis.Response | null> {
   try {
-    const auth = await getAuthedGoogleClient(account)
-    const tokenObj = await auth.getAccessToken().catch(() => null)
-    const accessToken = tokenObj?.token || null
-    const authHeaders = normalizeHeaders(await auth.getRequestHeaders())
+    let authHeaders: Record<string, string> = {}
+    let accessToken: string | null = null
+    let auth: any = null
+    try {
+      auth = await getAuthedGoogleClient(account)
+      const tokenObj = await auth.getAccessToken().catch(() => null)
+      accessToken = tokenObj?.token || null
+      authHeaders = normalizeHeaders(await auth.getRequestHeaders())
+    } catch {
+      // Cookie-only account or OAuth tokens unavailable; proceed with cookie bypass
+    }
+
     const dispatcher = getUndiciDispatcher(getAccountProxyUrl(account))
     const rkHeaders = resourceKeyHeaders(fileId, resourceKey)
     const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     const cookie = await getAccountCookie(account)
     const cookieHeader: Record<string, string> = cookie ? { Cookie: cookie } : {}
 
-    // Strategy 0: Authenticated download/stream with Google Drive Cookie (for private/view-only/protected files)
+    // Strategy 0: Specialized Video Playback Stream Bypass via Python Helper (for protected/restricted videos)
     if (cookie) {
+      const resolved = await resolveGoogleVideoStream(account, fileId).catch(() => null)
+      if (resolved && resolved.videoUrl) {
+        const videoRes = await fetch(resolved.videoUrl, {
+          dispatcher,
+          headers: {
+            'User-Agent': resolved.userAgent,
+            'Referer': 'https://drive.google.com/',
+            ...(range ? { Range: range } : {}),
+            'Accept': '*/*',
+          },
+        } as any).catch(() => null)
+
+        if (videoRes && (videoRes.status === 200 || videoRes.status === 206)) {
+          return videoRes
+        }
+      }
+
+      // Strategy 0.1: Authenticated direct download with Google Drive Cookie
       const cookieUcUrl = `https://drive.usercontent.google.com/download?id=${fileId}&export=download&confirm=t${resourceKey ? `&resourcekey=${resourceKey}` : ''}`
       const cookieRes = await fetch(cookieUcUrl, {
         dispatcher,
@@ -268,15 +295,17 @@ export async function attemptGoogleBypassStream(
     }
 
     // Strategy 4: Google Docs export for docs/sheets/slides
-    const drive = getGoogleDriveClient(auth, getAccountProxyUrl(account))
-    const meta = await drive.files.get({ fileId, fields: 'mimeType,name', supportsAllDrives: true }, { headers: rkHeaders }).catch(() => null)
-    if (meta?.data.mimeType && googleDownloadExportMimeTypes[meta.data.mimeType]) {
-      const target = googleDownloadExportMimeTypes[meta.data.mimeType]
-      const expRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=${encodeURIComponent(target.mimeType)}`, {
-        dispatcher,
-        headers: { ...authHeaders, ...rkHeaders },
-      } as any).catch(() => null)
-      if (expRes && (expRes.status === 200 || expRes.status === 206)) return expRes
+    if (auth) {
+      const drive = getGoogleDriveClient(auth, getAccountProxyUrl(account))
+      const meta = await drive.files.get({ fileId, fields: 'mimeType,name', supportsAllDrives: true }, { headers: rkHeaders }).catch(() => null)
+      if (meta?.data.mimeType && googleDownloadExportMimeTypes[meta.data.mimeType]) {
+        const target = googleDownloadExportMimeTypes[meta.data.mimeType]
+        const expRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=${encodeURIComponent(target.mimeType)}`, {
+          dispatcher,
+          headers: { ...authHeaders, ...rkHeaders },
+        } as any).catch(() => null)
+        if (expRes && (expRes.status === 200 || expRes.status === 206)) return expRes
+      }
     }
 
     return null

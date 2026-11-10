@@ -223,28 +223,40 @@ libraryRouter.get('/stream/:token', async (req, res, next) => {
       range,
       res,
       async (rangeForFetch?: string) => {
-        const auth = await getAuthedGoogleClient(account)
-        const headers = normalizeHeaders(await auth.getRequestHeaders())
+        let authHeaders: Record<string, string> = {}
+        try {
+          const auth = await getAuthedGoogleClient(account)
+          authHeaders = normalizeHeaders(await auth.getRequestHeaders())
+        } catch {
+          // Cookie-only account or token refresh failed: proceed directly to bypass stream
+        }
+
         const dispatcher = getUndiciDispatcher(getAccountProxyUrl(account))
         const rkHeaders = resourceKeyHeaders(fileId, resourceKey)
-        const fetchHeaders: Record<string, string> = {
-          ...headers,
-          ...rkHeaders,
-          ...(rangeForFetch ? { Range: rangeForFetch } : {}),
-        }
-        let response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&supportsAllDrives=true`, {
-          dispatcher,
-          headers: fetchHeaders,
-        } as any)
+        let response: globalThis.Response | null = null
 
-        if (!response.ok) {
+        if (Object.keys(authHeaders).length > 0) {
+          const fetchHeaders: Record<string, string> = {
+            ...authHeaders,
+            ...rkHeaders,
+            ...(rangeForFetch ? { Range: rangeForFetch } : {}),
+          }
+          response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&supportsAllDrives=true`, {
+            dispatcher,
+            headers: fetchHeaders,
+          } as any).catch(() => null)
+        }
+
+        if (!response || !response.ok) {
           // Attempt bypass for blocked Google Drive download
           const bypass = await attemptGoogleBypassStream(account, fileId, resourceKey, rangeForFetch)
           if (bypass && (bypass.status === 200 || bypass.status === 206)) {
             response = bypass
           } else {
-            const text = await response.text().catch(() => '')
-            noteGoogleError(account.id, { status: response.status, message: text })
+            if (response) {
+              const text = await response.text().catch(() => '')
+              noteGoogleError(account.id, { status: response.status, message: text })
+            }
             return null
           }
         }
@@ -427,23 +439,35 @@ libraryRouter.get('/download/:token', async (req, res, next) => {
         }
 
         // Asked per file: a long download outlives the hour an access token lasts.
-        const auth = await getAuthedGoogleClient(account)
+        let authHeaders: Record<string, string> = {}
+        try {
+          const auth = await getAuthedGoogleClient(account)
+          authHeaders = normalizeHeaders(await auth.getRequestHeaders())
+        } catch {
+          // Cookie-only account or token refresh failed: proceed directly to bypass stream
+        }
+
         const exportTarget = googleDownloadExportMimeTypes[entry.mimeType]
         const url = exportTarget
           ? `https://www.googleapis.com/drive/v3/files/${entry.id}/export?mimeType=${encodeURIComponent(exportTarget.mimeType)}`
           : `https://www.googleapis.com/drive/v3/files/${entry.id}?alt=media&supportsAllDrives=true`
-        let response = await fetch(url, {
-          dispatcher: getUndiciDispatcher(getAccountProxyUrl(account)),
-          headers: { ...normalizeHeaders(await auth.getRequestHeaders()), ...resourceKeyHeaders(entry.id, entry.resourceKey) },
-        } as any)
-        if (!response.ok || !response.body) {
-          await response.body?.cancel().catch(() => undefined)
+
+        let response: globalThis.Response | null = null
+        if (Object.keys(authHeaders).length > 0) {
+          response = await fetch(url, {
+            dispatcher: getUndiciDispatcher(getAccountProxyUrl(account)),
+            headers: { ...authHeaders, ...resourceKeyHeaders(entry.id, entry.resourceKey) },
+          } as any).catch(() => null)
+        }
+
+        if (!response || !response.ok || !response.body) {
+          await response?.body?.cancel().catch(() => undefined)
           // Attempt Google download bypass
           const bypassRes = await attemptGoogleBypassStream(account, entry.id, entry.resourceKey)
           if (bypassRes && bypassRes.ok && bypassRes.body) {
             response = bypassRes
           } else {
-            skipped.push(`${entry.path} (${response.status === 403 ? 'người chia sẻ chặn tải xuống' : `lỗi ${response.status}`})`)
+            skipped.push(`${entry.path} (${response?.status === 403 ? 'người chia sẻ chặn tải xuống' : `lỗi ${response?.status || 'kết nối'}`})`)
             continue
           }
         }
@@ -573,8 +597,8 @@ libraryRouter.get('/shared/:token/items', async (req, res, next) => {
         const resourceKey = file.shortcutDetails ? file.shortcutDetails.targetResourceKey ?? null : file.resourceKey ?? null
         const isFolder = mimeType === FOLDER_MIME
         const isGoogleDoc = mimeType.startsWith('application/vnd.google-apps.')
-        // canDownload reflects owner's share configuration (allowDownload) and Google Drive capabilities
-        const canDownload = allowDownload && (file.capabilities?.canDownload !== false)
+        // canDownload reflects owner's share configuration (allowDownload) - HCDrive server bypasses Google Drive restrictions
+        const canDownload = allowDownload
         return {
           id,
           name: file.name!,
@@ -935,7 +959,7 @@ libraryRouter.get('/:id/items', loadOwnedLink, async (req: OwnedRequest<SavedLin
           isFolder,
           size: file.size ?? null,
           durationSeconds: file.videoMediaMetadata?.durationMillis ? Math.round(Number(file.videoMediaMetadata.durationMillis) / 1000) : null,
-          canDownload: file.capabilities?.canDownload !== false,
+          canDownload: true, // In user's own library, all items can be downloaded/streamed via server bypass
           resourceKey,
           webViewLink: file.webViewLink ?? (id ? `https://drive.google.com/file/d/${id}/view` : null),
           previewUrl: isFolder ? null : previewUrl(id, resourceKey),
