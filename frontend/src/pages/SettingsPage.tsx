@@ -784,6 +784,7 @@ export function SettingsPage() {
   const [savingTempCache, setSavingTempCache] = useState(false)
   const [clearingTempCache, setClearingTempCache] = useState(false)
   const [tempCacheTtl, setTempCacheTtl] = useState(30)
+  const [isCustomTtl, setIsCustomTtl] = useState(false)
   const [tempCacheMaxGb, setTempCacheMaxGb] = useState(10)
   const [tempCacheEnabled, setTempCacheEnabled] = useState(true)
 
@@ -793,6 +794,7 @@ export function SettingsPage() {
       const res = await apiFetch<TempCacheStats>('/system/temp-cache')
       setTempCacheStats(res)
       setTempCacheTtl(res.ttlMinutes)
+      setIsCustomTtl(![0, 10, 15, 30, 60, 120, 360, 1440].includes(res.ttlMinutes))
       setTempCacheMaxGb(res.maxGB)
       setTempCacheEnabled(res.enabled)
     } catch (err) {
@@ -816,6 +818,7 @@ export function SettingsPage() {
       })
       setTempCacheStats(res.stats)
       setTempCacheTtl(res.stats.ttlMinutes)
+      setIsCustomTtl(![0, 10, 15, 30, 60, 120, 360, 1440].includes(res.stats.ttlMinutes))
       setTempCacheMaxGb(res.stats.maxGB)
       setTempCacheEnabled(res.stats.enabled)
       showSnackbar(vi ? 'Đã lưu cấu hình bộ nhớ đệm thành công!' : 'Temp cache settings saved successfully!')
@@ -1868,14 +1871,21 @@ export function SettingsPage() {
                     </label>
                     <div className="flex items-center gap-2">
                       <select
-                        value={[10, 15, 30, 60, 120, 360, 1440].includes(tempCacheTtl) ? String(tempCacheTtl) : 'custom'}
+                        value={isCustomTtl ? 'custom' : String(tempCacheTtl)}
                         onChange={(e) => {
-                          if (e.target.value !== 'custom') {
+                          if (e.target.value === 'custom') {
+                            setIsCustomTtl(true)
+                            if ([0, 10, 15, 30, 60, 120, 360, 1440].includes(tempCacheTtl)) {
+                              setTempCacheTtl(45)
+                            }
+                          } else {
+                            setIsCustomTtl(false)
                             setTempCacheTtl(Number(e.target.value))
                           }
                         }}
                         className="w-full h-9 px-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#1e1f20] text-slate-900 dark:text-white text-xs focus:outline-none focus:border-[#0b57d0]"
                       >
+                        <option value="0">{vi ? '∞ Vĩnh viễn (Không bao giờ xóa)' : '∞ Permanent (Never expire)'}</option>
                         <option value="10">10 {vi ? 'phút' : 'minutes'}</option>
                         <option value="15">15 {vi ? 'phút' : 'minutes'}</option>
                         <option value="30">30 {vi ? 'phút (Mặc định)' : 'minutes (Default)'}</option>
@@ -1886,19 +1896,29 @@ export function SettingsPage() {
                         <option value="custom">{vi ? 'Tự nhập phút…' : 'Custom minutes…'}</option>
                       </select>
                     </div>
-                    {![10, 15, 30, 60, 120, 360, 1440].includes(tempCacheTtl) && (
-                      <input
-                        type="number"
-                        min={1}
-                        max={43200}
-                        value={tempCacheTtl}
-                        onChange={(e) => setTempCacheTtl(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                        placeholder={vi ? 'Nhập số phút' : 'Minutes'}
-                        className="mt-1.5 w-full h-8 px-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#1e1f20] text-slate-900 dark:text-white text-xs focus:outline-none focus:border-[#0b57d0]"
-                      />
+                    {isCustomTtl && (
+                      <div className="mt-2 flex items-center gap-2">
+                        <input
+                          type="number"
+                          min={0}
+                          max={525600}
+                          value={tempCacheTtl}
+                          onChange={(e) => {
+                            const val = parseInt(e.target.value, 10)
+                            setTempCacheTtl(isNaN(val) ? 0 : Math.max(0, val))
+                          }}
+                          placeholder={vi ? 'Nhập số phút (0 = vĩnh viễn)' : 'Minutes (0 = permanent)'}
+                          className="w-full h-8 px-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#1e1f20] text-slate-900 dark:text-white text-xs focus:outline-none focus:border-[#0b57d0]"
+                        />
+                        <span className="text-xs text-slate-500 shrink-0 font-medium whitespace-nowrap">
+                          {tempCacheTtl === 0 ? (vi ? 'Vĩnh viễn' : 'Permanent') : (vi ? 'phút' : 'mins')}
+                        </span>
+                      </div>
                     )}
                     <p className="text-[10px] text-slate-400 mt-1">
-                      {vi ? 'Tự xóa sau thời gian không có lượt truy cập' : 'Auto-deleted after inactivity'}
+                      {tempCacheTtl === 0
+                        ? (vi ? '∞ Tệp đệm sẽ được lưu vĩnh viễn trên server, không bao giờ tự động xóa.' : '∞ Cached files are stored permanently on server, never auto-deleted.')
+                        : (vi ? 'Tự xóa sau thời gian không có lượt truy cập' : 'Auto-deleted after inactivity')}
                     </p>
                   </div>
 

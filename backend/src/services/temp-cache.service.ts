@@ -50,7 +50,7 @@ export function getCacheTTLMinutes(): number {
 }
 
 export function setCacheTTLMinutes(val: number) {
-  cacheTTLMinutes = Math.max(1, Math.min(val, 43200)) // 1 min to 30 days
+  cacheTTLMinutes = Math.max(0, Math.min(val, 525600)) // 0 = permanent / never expire, up to 1 year
 }
 
 export function getCacheMaxGB(): number {
@@ -70,7 +70,7 @@ export function setCacheEnabled(val: boolean) {
 }
 
 export function getCacheTTLMs(): number {
-  return cacheTTLMinutes * 60 * 1000
+  return cacheTTLMinutes <= 0 ? 0 : cacheTTLMinutes * 60 * 1000
 }
 
 export async function initTempCacheConfig() {
@@ -85,7 +85,7 @@ export async function initTempCacheConfig() {
     for (const s of settings) {
       if (s.key === 'temp_cache_ttl_minutes') {
         const parsed = parseInt(s.value, 10)
-        if (!isNaN(parsed) && parsed > 0) cacheTTLMinutes = parsed
+        if (!isNaN(parsed) && parsed >= 0) cacheTTLMinutes = parsed
       } else if (s.key === 'temp_cache_max_gb') {
         const parsed = parseFloat(s.value)
         if (!isNaN(parsed) && parsed >= 0) cacheMaxGB = parsed
@@ -318,11 +318,11 @@ export function purgeExpiredCache(): { deleted: number; freedBytes: number } {
           continue
         }
 
-        // Clean expired meta and data files
+        // Clean expired meta and data files (if TTL is set > 0; 0 means permanent)
         if (name.endsWith('.meta.json')) {
           const raw = fs.readFileSync(fullPath, 'utf8')
           const meta: CacheMeta = JSON.parse(raw)
-          if (now - meta.lastAccessedAt > ttlMs) {
+          if (ttlMs > 0 && now - meta.lastAccessedAt > ttlMs) {
             const dataFile = path.join(dir, `${safeKey(meta.fileId)}.data`)
             if (fs.existsSync(dataFile)) {
               try {
@@ -417,7 +417,7 @@ export async function serveCachedFile(
 
   res.setHeader('Content-Type', contentType)
   res.setHeader('Accept-Ranges', 'bytes')
-  res.setHeader('Cache-Control', 'private, max-age=1800')
+  res.setHeader('Cache-Control', cacheTTLMinutes <= 0 ? 'private, max-age=31536000' : `private, max-age=${Math.min(cacheTTLMinutes * 60, 86400)}`)
   res.setHeader('Content-Disposition', formatContentDisposition(disposition, outFileName))
 
   if (rangeHeader && typeof rangeHeader === 'string') {
@@ -564,7 +564,7 @@ export async function downloadToCache(
       progress.totalBytes = stat.size
       progress.percent = 100
       progress.lastUpdatedAt = Date.now()
-      console.log(`[temp-cache] Cached ${fileName} (${(stat.size / (1024 * 1024)).toFixed(2)} MB) for 30 minutes.`)
+      console.log(`[temp-cache] Cached ${fileName} (${(stat.size / (1024 * 1024)).toFixed(2)} MB) (TTL: ${cacheTTLMinutes <= 0 ? 'Permanent' : cacheTTLMinutes + ' mins'}).`)
       return meta
     } catch (err: any) {
       console.warn(`[temp-cache] Background cache download failed for ${fileId}:`, err?.message || err)
@@ -653,7 +653,7 @@ export async function streamCachedOrFetch(
       res.status(rangeSource.status || 206)
       res.setHeader('Content-Type', rangeSource.contentType || 'application/octet-stream')
       res.setHeader('Accept-Ranges', 'bytes')
-      res.setHeader('Cache-Control', 'private, max-age=1800')
+      res.setHeader('Cache-Control', cacheTTLMinutes <= 0 ? 'private, max-age=31536000' : `private, max-age=${Math.min(cacheTTLMinutes * 60, 86400)}`)
       res.setHeader(
         'Content-Disposition',
         `${disposition}; filename="${encodeURIComponent(outFileName)}"; filename*=UTF-8''${encodeURIComponent(outFileName)}`
@@ -685,7 +685,7 @@ export async function streamCachedOrFetch(
   res.status(rangeHeader ? (source.status || 206) : 200)
   res.setHeader('Content-Type', contentType)
   res.setHeader('Accept-Ranges', 'bytes')
-  res.setHeader('Cache-Control', 'private, max-age=1800')
+  res.setHeader('Cache-Control', cacheTTLMinutes <= 0 ? 'private, max-age=31536000' : `private, max-age=${Math.min(cacheTTLMinutes * 60, 86400)}`)
   res.setHeader('Content-Disposition', formatContentDisposition(disposition, outFileName))
   if (source.contentRange) res.setHeader('Content-Range', source.contentRange)
   if (sizeBytes) res.setHeader('Content-Length', sizeBytes)

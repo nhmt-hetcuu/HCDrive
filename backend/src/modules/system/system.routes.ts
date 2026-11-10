@@ -422,7 +422,7 @@ systemRouter.get('/temp-cache', async (_req, res, next) => {
 systemRouter.patch('/temp-cache', async (req, res, next) => {
   try {
     const body = z.object({
-      ttlMinutes: z.number().int().min(1).max(43200).optional(),
+      ttlMinutes: z.number().int().min(0).max(525600).optional(),
       maxGB: z.number().min(0).max(1000).optional(),
       enabled: z.boolean().optional(),
     }).parse(req.body)
