@@ -1,12 +1,12 @@
 import { useEffect, useState, useRef } from 'react'
 import { API_URL, formatBytes } from '@/lib/api'
 import { getAccessToken } from '@/lib/auth'
-import { CheckCircle2, Loader2, Zap } from 'lucide-react'
+import { CheckCircle2, Clock, Loader2, Zap } from 'lucide-react'
 
 export type CacheProgressData = {
   fileId: string
   fileName: string
-  status: 'idle' | 'downloading' | 'completed' | 'error'
+  status: 'idle' | 'downloading' | 'completed' | 'error' | 'queued'
   downloadedBytes: number
   totalBytes: number
   percent: number
@@ -14,6 +14,10 @@ export type CacheProgressData = {
   startedAt: number
   lastUpdatedAt: number
   error?: string
+  queuePosition?: number
+  activeCount?: number
+  maxConcurrent?: number
+  message?: string
 }
 
 export function StreamProgressBar({
@@ -75,9 +79,11 @@ export function StreamProgressBar({
         if (!isMounted) return
         setData(json)
 
-        // Poll interval: 800ms when downloading, 1500ms when idle/buffering, stop if completed
+        // Poll interval: 800ms when downloading, 1000ms when queued, 1500ms when idle/buffering, stop if completed
         if (json.status === 'downloading') {
           timerRef.current = setTimeout(fetchProgress, 800)
+        } else if (json.status === 'queued') {
+          timerRef.current = setTimeout(fetchProgress, 1000)
         } else if (json.status === 'idle') {
           timerRef.current = setTimeout(fetchProgress, 1500)
         }
@@ -100,6 +106,7 @@ export function StreamProgressBar({
   if (data.status === 'idle' && !isBuffering) return null
 
   const isDownloading = data.status === 'downloading'
+  const isQueued = data.status === 'queued'
   const isCompleted = data.status === 'completed'
 
   return (
@@ -113,6 +120,8 @@ export function StreamProgressBar({
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-[#0b57d0] dark:bg-[#a8c7fa]"></span>
             </span>
+          ) : isQueued ? (
+            <Clock className="h-4 w-4 text-amber-500 shrink-0 animate-pulse" />
           ) : isCompleted ? (
             <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
           ) : (
@@ -122,15 +131,19 @@ export function StreamProgressBar({
           <span className="truncate">
             {isDownloading
               ? vi
-                ? 'Đang đệm vào Server Cache (Tốc độ cao)'
-                : 'Buffering to Server Cache (High Speed)'
-              : isCompleted
+                ? `Máy chủ đang tải nền vào SSD (${data.percent}%)`
+                : `Buffering to Server Cache (${data.percent}%)`
+              : isQueued
                 ? vi
-                  ? 'Đã lưu Cache trên Server (Tua nhanh tức thì 30p)'
-                  : 'Cached on Server (Instant 30-min seeking)'
-                : vi
-                  ? 'Đang kết nối luồng dữ liệu...'
-                  : 'Connecting stream...'}
+                  ? `Đang xếp hàng chờ tải nền (Vị trí #${data.queuePosition || 1})`
+                  : `In download queue (Position #${data.queuePosition || 1})`
+                : isCompleted
+                  ? vi
+                    ? 'Đã lưu vĩnh viễn trên SSD máy chủ (Tua nhanh tức thì)'
+                    : 'Permanently cached on server SSD (Instant seeking)'
+                  : vi
+                    ? 'Đang kết nối luồng dữ liệu...'
+                    : 'Connecting stream...'}
           </span>
         </div>
 
@@ -143,7 +156,7 @@ export function StreamProgressBar({
           )}
           {isDownloading && data.totalBytes > 0 && (
             <span className="tabular-nums font-medium text-slate-700 dark:text-slate-300">
-              {formatBytes(data.downloadedBytes)} / {formatBytes(data.totalBytes)} ({data.percent}%)
+              {formatBytes(data.downloadedBytes)} / {formatBytes(data.totalBytes)}
             </span>
           )}
           {isCompleted && (
@@ -164,6 +177,16 @@ export function StreamProgressBar({
         </div>
       </div>
 
+      {isQueued && (
+        <div className="mt-2 text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/50 rounded-lg p-2">
+          <span>
+            {vi
+              ? `Hệ thống đang tải đồng thời ${data.activeCount || 3}/${data.maxConcurrent || 3} video. Video này sẽ tự động tải 100% về máy chủ ngay khi có lượt trống!`
+              : `Downloading ${data.activeCount || 3}/${data.maxConcurrent || 3} videos. This video will automatically download to SSD once a slot frees up!`}
+          </span>
+        </div>
+      )}
+
       {isDownloading && (
         <div className="mt-2.5">
           <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
@@ -175,8 +198,8 @@ export function StreamProgressBar({
           <p className="mt-1.5 text-[11px] text-slate-500 dark:text-slate-400 flex items-center justify-between">
             <span>
               {vi
-                ? 'Bạn có thể xem ngay lúc này; máy chủ tiếp tục tải nền để tua mượt mà.'
-                : 'You can watch now; server continues caching in background for smooth seeking.'}
+                ? 'Tải nền 100% độc lập trên máy chủ kể cả khi bạn chuyển video hoặc thoát ứng dụng.'
+                : '100% server background download persists even if you switch videos or exit the app.'}
             </span>
           </p>
         </div>

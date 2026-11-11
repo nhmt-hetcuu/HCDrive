@@ -27,6 +27,7 @@ const envSchema = z.object({
   // General API limit per signed-in user (or per IP before sign-in).
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(2000),
   RATE_LIMIT_WINDOW_MINUTES: z.coerce.number().positive().default(15),
+  REDIS_URL: z.string().optional(),
 })
 
 export const env = envSchema.parse(process.env)

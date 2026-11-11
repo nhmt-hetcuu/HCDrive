@@ -6,6 +6,7 @@ import { z } from 'zod'
 import type { ConnectedAccount, SavedLink } from '@prisma/client'
 import type { drive_v3 } from 'googleapis'
 import { prisma } from '../../config/prisma.js'
+import { redisGet, redisSet } from '../../config/redis.js'
 import { optionalAuth, requireAuth, type AuthRequest } from '../../middleware/auth.middleware.js'
 import { verifyAccessToken } from '../../utils/jwt.js'
 import { ownedBy, requireOwned, type OwnedRequest } from '../../middleware/ownership.js'
@@ -215,11 +216,14 @@ libraryRouter.get('/stream/:token', async (req, res, next) => {
     const rk = typeof req.query.rk === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(req.query.rk) ? req.query.rk : null
     const resourceKey = fileId === link.driveFileId ? link.resourceKey : rk
     const range = typeof req.headers.range === 'string' ? req.headers.range : undefined
+    const downloadQuery = typeof req.query.download === 'string' && req.query.download.trim() ? req.query.download.trim() : null
+    const effectiveFileName = downloadQuery || downloadName || 'file'
+    const isAttachment = Boolean(downloadQuery || downloadName)
 
     // Stream from 30-minute server cache or download to cache and stream with full Range support
     const cachedSuccess = await streamCachedOrFetch(
       fileId,
-      downloadName || 'file',
+      effectiveFileName,
       range,
       res,
       async (rangeForFetch?: string) => {
@@ -249,7 +253,7 @@ libraryRouter.get('/stream/:token', async (req, res, next) => {
 
         if (!response || !response.ok) {
           // Attempt bypass for blocked Google Drive download
-          const bypass = await attemptGoogleBypassStream(account, fileId, resourceKey, rangeForFetch)
+          const bypass = await attemptGoogleBypassStream(account, fileId, resourceKey, rangeForFetch, 'video/mp4')
           if (bypass && (bypass.status === 200 || bypass.status === 206)) {
             response = bypass
           } else {
@@ -279,15 +283,16 @@ libraryRouter.get('/stream/:token', async (req, res, next) => {
         }
       },
       {
-        disposition: downloadName ? 'attachment' : 'inline',
-        fileName: downloadName || undefined,
+        disposition: isAttachment ? 'attachment' : 'inline',
+        fileName: effectiveFileName,
+        isPermanent: true, // Lưu vĩnh viễn video/bài học vào disk để lần sau không cần chạy Selenium nữa
       }
     )
 
     if (!cachedSuccess && !res.headersSent) {
       return res.status(403).json({
         code: 'GOOGLE_STREAM_RESTRICTED',
-        message: 'Google Drive giới hạn quyền stream/tải tệp này hoặc không thể kết nối tới Google Drive.',
+        message: 'Google Drive giới hạn quyền stream/tải tệp này. Nếu tệp bị chặn tải, vui lòng cập nhật lại Cookie Google Drive mới trong Cài đặt hoặc Thư viện để hệ thống bypass xem video.',
       })
     }
   } catch (error) {
@@ -463,7 +468,7 @@ libraryRouter.get('/download/:token', async (req, res, next) => {
         if (!response || !response.ok || !response.body) {
           await response?.body?.cancel().catch(() => undefined)
           // Attempt Google download bypass
-          const bypassRes = await attemptGoogleBypassStream(account, entry.id, entry.resourceKey)
+          const bypassRes = await attemptGoogleBypassStream(account, entry.id, entry.resourceKey, undefined, entry.mimeType)
           if (bypassRes && bypassRes.ok && bypassRes.body) {
             response = bypassRes
           } else {
@@ -976,27 +981,8 @@ libraryRouter.get('/:id/items', loadOwnedLink, async (req: OwnedRequest<SavedLin
   }
 })
 
-libraryRouter.post('/:id/cookie', requireAuth, async (req: AuthRequest, res, next) => {
-  try {
-    const link = await prisma.savedLink.findFirst({
-      where: { id: String(req.params.id), userId: req.user!.id },
-    })
-    if (!link) return res.status(404).json({ code: 'NOT_FOUND', message: 'Not found.' })
-    const account = await accountForLink(link)
-    if (!account) return noAccess(res)
-
-    const cookie = typeof req.body?.cookie === 'string' ? req.body.cookie.trim() : ''
-    const cookieEncrypted = cookie ? encryptText(cookie) : null
-
-    await prisma.connectedAccount.update({
-      where: { id: account.id },
-      data: { cookieEncrypted },
-    })
-
-    return res.json({ success: true, hasCookie: Boolean(cookieEncrypted) })
-  } catch (error) {
-    return next(error)
-  }
+libraryRouter.post('/:id/cookie', requireAuth, async (req: AuthRequest, res) => {
+  return res.status(400).json({ code: 'DEPRECATED', message: 'Tính năng Cookie đã được tách ra khỏi dự án.' })
 })
 
 const shareConfigSchema = z.object({
@@ -1094,6 +1080,18 @@ type CopyJob = {
 }
 
 const copyJobs = new Map<string, CopyJob>()
+
+async function getCopyJob(linkId: string): Promise<CopyJob | null> {
+  const cached = await redisGet<CopyJob>(`hcdrive:copy-job:${linkId}`)
+  if (cached) return cached
+  return copyJobs.get(linkId) ?? null
+}
+
+async function saveCopyJob(linkId: string, job: CopyJob): Promise<void> {
+  copyJobs.set(linkId, job)
+  await redisSet(`hcdrive:copy-job:${linkId}`, job, 86400).catch(() => undefined)
+}
+
 const COPY_FIELDS = 'nextPageToken,files(id,name,mimeType,resourceKey,capabilities(canCopy),shortcutDetails(targetId,targetMimeType,targetResourceKey))'
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -1121,7 +1119,8 @@ async function copyFolderTree(
   sourceId: string,
   resourceKey: string | null,
   targetParentId: string,
-  job: CopyJob
+  job: CopyJob,
+  linkId?: string
 ) {
   const children: drive_v3.Schema$File[] = []
   let pageToken: string | undefined
@@ -1208,7 +1207,7 @@ async function copyFolderTree(
     // Bypass stream for restricted files
     if (!copied) {
       try {
-        const bypass = await attemptGoogleBypassStream(sourceAccount, id, key)
+        const bypass = await attemptGoogleBypassStream(sourceAccount, id, key, undefined, file.mimeType ?? undefined)
         if (bypass && bypass.ok && bypass.body) {
           await withRetry(targetAccount.id, () => targetDrive.files.create({
             requestBody: { name: file.name ?? id, parents: [targetParentId] },
@@ -1226,6 +1225,9 @@ async function copyFolderTree(
     if (!copied) {
       job.skipped += 1
     }
+    if (linkId) {
+      saveCopyJob(linkId, job).catch(() => undefined)
+    }
   })
 
   for (const folder of folders) {
@@ -1237,7 +1239,10 @@ async function copyFolderTree(
       supportsAllDrives: true,
     }))
     job.folders += 1
-    await copyFolderTree(sourceAccount, sourceDrive, targetAccount, targetDrive, id, key, created.data.id!, job)
+    if (linkId) {
+      saveCopyJob(linkId, job).catch(() => undefined)
+    }
+    await copyFolderTree(sourceAccount, sourceDrive, targetAccount, targetDrive, id, key, created.data.id!, job, linkId)
   }
 }
 
@@ -1255,7 +1260,8 @@ async function runCopyJob(link: SavedLink, sourceAccount: ConnectedAccount, targ
       }))
       job.folderUrl = folder.data.webViewLink ?? null
       job.folders += 1
-      await copyFolderTree(sourceAccount, sourceDrive, targetAccount, targetDrive, link.driveFileId, link.resourceKey, folder.data.id!, job)
+      await saveCopyJob(link.id, job)
+      await copyFolderTree(sourceAccount, sourceDrive, targetAccount, targetDrive, link.driveFileId, link.resourceKey, folder.data.id!, job, link.id)
     } else {
       job.current = link.title
       let copied = false
@@ -1327,13 +1333,15 @@ async function runCopyJob(link: SavedLink, sourceAccount: ConnectedAccount, targ
   } finally {
     job.current = null
     job.finishedAt = new Date().toISOString()
+    await saveCopyJob(link.id, job)
     // Bring the new copies into "Drive của tôi".
     syncGoogleAppFolderFiles(targetAccount.id, targetAccount.userId, { force: true }).catch(() => undefined)
   }
 }
 
-libraryRouter.get('/:id/save-to-drive', loadOwnedLink, (req: OwnedRequest<SavedLink>, res) => {
-  return res.json({ job: copyJobs.get(req.owned!.id) ?? null })
+libraryRouter.get('/:id/save-to-drive', loadOwnedLink, async (req: OwnedRequest<SavedLink>, res) => {
+  const job = await getCopyJob(req.owned!.id)
+  return res.json({ job: job ?? null })
 })
 
 const saveToDriveSchema = z.object({
@@ -1344,7 +1352,7 @@ libraryRouter.post('/:id/save-to-drive', loadOwnedLink, async (req: OwnedRequest
   try {
     const body = saveToDriveSchema.parse(req.body ?? {})
     const link = req.owned!
-    const running = copyJobs.get(link.id)
+    const running = await getCopyJob(link.id)
     if (running?.status === 'running') return res.status(202).json({ job: running })
     const sourceAccount = await accountForLink(link)
     if (!sourceAccount) return noAccess(res)
@@ -1374,7 +1382,7 @@ libraryRouter.post('/:id/save-to-drive', loadOwnedLink, async (req: OwnedRequest
       startedAt: new Date().toISOString(),
       finishedAt: null,
     }
-    copyJobs.set(link.id, job)
+    await saveCopyJob(link.id, job)
     runCopyJob(link, sourceAccount, targetAccount, job).catch(() => undefined)
     return res.status(202).json({ job })
   } catch (error) {

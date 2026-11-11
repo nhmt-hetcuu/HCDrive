@@ -1,12 +1,12 @@
 import { useState, useEffect, type FormEvent } from 'react'
-import { Check, CheckCircle, Cookie, Copy, ExternalLink, Globe, Loader2, RefreshCw, ShieldCheck } from 'lucide-react'
+import { Check, CheckCircle, Copy, ExternalLink, Globe, Loader2, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DummyModal } from '@/components/drive/DummyModal'
 import { apiFetch } from '@/lib/api'
 import { useLanguage } from '@/context/LanguageContext'
 import { cn } from '@/lib/utils'
 
-export type OAuthMethod = 'rclone' | 'custom' | 'cookie'
+export type OAuthMethod = 'rclone' | 'custom'
 
 type OAuthMethodInfo = {
   hasCustom: boolean
@@ -28,8 +28,8 @@ export function GoogleConnectModal({ open, initialMethod, onClose, onSuccess }: 
   const [selectedMethod, setSelectedMethod] = useState<OAuthMethod>('rclone')
   const [loadingMethods, setLoadingMethods] = useState(true)
 
-  // Step state: 'select' -> 'verify' | 'cookie'
-  const [step, setStep] = useState<'select' | 'verify' | 'cookie'>('select')
+  // Step state: 'select' -> 'verify'
+  const [step, setStep] = useState<'select' | 'verify'>('select')
   const [verifyUrl, setVerifyUrl] = useState('')
   const [launching, setLaunching] = useState(false)
   const [copiedLink, setCopiedLink] = useState(false)
@@ -37,12 +37,6 @@ export function GoogleConnectModal({ open, initialMethod, onClose, onSuccess }: 
   // Code exchange state
   const [pasteCode, setPasteCode] = useState('')
   const [exchangingCode, setExchangingCode] = useState(false)
-
-  // Cookie connection state
-  const [cookieInput, setCookieInput] = useState('')
-  const [cookieEmail, setCookieEmail] = useState('')
-  const [cookieDisplayName, setCookieDisplayName] = useState('')
-  const [connectingCookie, setConnectingCookie] = useState(false)
 
   const [errorMsg, setErrorMsg] = useState('')
   const [successMsg, setSuccessMsg] = useState('')
@@ -52,18 +46,12 @@ export function GoogleConnectModal({ open, initialMethod, onClose, onSuccess }: 
       setStep('select')
       setVerifyUrl('')
       setPasteCode('')
-      setCookieInput('')
-      setCookieEmail('')
-      setCookieDisplayName('')
       setErrorMsg('')
       setSuccessMsg('')
       return
     }
 
-    if (initialMethod === 'cookie') {
-      setSelectedMethod('cookie')
-      setStep('cookie')
-    } else if (initialMethod) {
+    if (initialMethod) {
       setSelectedMethod(initialMethod)
       setStep('select')
     }
@@ -98,13 +86,6 @@ export function GoogleConnectModal({ open, initialMethod, onClose, onSuccess }: 
   }, [open, initialMethod, lang])
 
   async function handleProceed() {
-    if (selectedMethod === 'cookie') {
-      setStep('cookie')
-      setErrorMsg('')
-      setSuccessMsg('')
-      return
-    }
-
     setLaunching(true)
     setErrorMsg('')
     setSuccessMsg('')
@@ -156,58 +137,12 @@ export function GoogleConnectModal({ open, initialMethod, onClose, onSuccess }: 
     }
   }
 
-  async function handleConnectCookie(e: FormEvent) {
-    e.preventDefault()
-    if (!cookieInput.trim()) {
-      setErrorMsg(lang === 'vi' ? 'Vui lòng nhập chuỗi Cookie.' : 'Please enter the Cookie string.')
-      return
-    }
-
-    setConnectingCookie(true)
-    setErrorMsg('')
-    setSuccessMsg('')
-
-    try {
-      const res = await apiFetch<{ success: boolean; account: { email: string; displayName?: string } }>('/connected-accounts/google/cookie', {
-        method: 'POST',
-        body: JSON.stringify({
-          cookie: cookieInput.trim(),
-          email: cookieEmail.trim() || undefined,
-          displayName: cookieDisplayName.trim() || undefined,
-        }),
-      })
-
-      setSuccessMsg(
-        lang === 'vi'
-          ? `Kết nối thành công Google Drive (${res.account.displayName || res.account.email})!`
-          : `Connected Google Drive account (${res.account.displayName || res.account.email}) successfully!`
-      )
-      setCookieInput('')
-      setCookieEmail('')
-      setCookieDisplayName('')
-      setTimeout(() => {
-        onSuccess?.()
-        onClose()
-      }, 1200)
-    } catch (err: any) {
-      setErrorMsg(err.message || (lang === 'vi' ? 'Kết nối bằng Cookie thất bại. Vui lòng kiểm tra lại Cookie.' : 'Cookie connection failed. Please check the Cookie.'))
-    } finally {
-      setConnectingCookie(false)
-    }
-  }
-
   return (
     <DummyModal
       open={open}
-      title={
-        step === 'cookie'
-          ? (lang === 'vi' ? 'Kết nối Google Drive bằng Cookie' : 'Connect Google Drive with Cookie')
-          : (lang === 'vi' ? 'Kết nối tài khoản Google Drive' : 'Connect Google Drive Account')
-      }
+      title={lang === 'vi' ? 'Kết nối tài khoản Google Drive' : 'Connect Google Drive Account'}
       description={
-        step === 'cookie'
-          ? (lang === 'vi' ? 'Dán Cookie phiên đăng nhập Google Drive từ trình duyệt để vượt quyền riêng tư và stream video.' : 'Paste Google Drive session cookie from browser.')
-          : step === 'select'
+        step === 'select'
           ? (lang === 'vi' ? 'Chọn phương thức xác thực Google Drive phù hợp nhu cầu của bạn.' : 'Choose authentication method for Google Drive.')
           : (lang === 'vi' ? 'Tab đăng nhập đã được mở. Sau khi đăng nhập, dán mã hoặc đường link vào đây để xác nhận.' : 'Login tab is open. After approving, paste the code or redirected URL below.')
       }
@@ -238,7 +173,6 @@ export function GoogleConnectModal({ open, initialMethod, onClose, onSuccess }: 
             ) : (
               methodsData?.methods.map((m) => {
                 const isSelected = selectedMethod === m.id
-                const isCookie = m.id === 'cookie'
                 return (
                   <div
                     key={m.id}
@@ -248,9 +182,7 @@ export function GoogleConnectModal({ open, initialMethod, onClose, onSuccess }: 
                     className={cn(
                       "p-3.5 rounded-xl border-2 transition-all cursor-pointer flex items-start gap-3",
                       isSelected
-                        ? (isCookie
-                            ? "border-amber-500 bg-amber-50/60 dark:bg-amber-950/40"
-                            : "border-blue-600 bg-blue-50/60 dark:bg-blue-950/40")
+                        ? "border-blue-600 bg-blue-50/60 dark:bg-blue-950/40"
                         : "border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-900",
                       !m.available && "opacity-50 cursor-not-allowed hover:border-slate-200"
                     )}
@@ -261,18 +193,15 @@ export function GoogleConnectModal({ open, initialMethod, onClose, onSuccess }: 
                       checked={isSelected}
                       onChange={() => setSelectedMethod(m.id)}
                       disabled={!m.available}
-                      className={cn("mt-1 h-4 w-4", isCookie ? "accent-amber-600" : "accent-blue-600")}
+                      className="mt-1 h-4 w-4 accent-blue-600"
                     />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        {isCookie ? <Cookie className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" /> : null}
                         <span className="font-bold text-sm text-slate-900 dark:text-white">{m.name}</span>
                         {m.badge ? (
                           <span className={cn(
                             "text-[10px] font-semibold px-2 py-0.5 rounded-full border",
-                            isCookie
-                              ? "bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-950/80 dark:text-amber-300 dark:border-amber-800"
-                              : m.id === 'rclone'
+                            m.id === 'rclone'
                               ? "bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-950/80 dark:text-emerald-300 dark:border-emerald-800"
                               : "bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-950/80 dark:text-blue-300 dark:border-blue-800"
                           )}>
@@ -298,22 +227,15 @@ export function GoogleConnectModal({ open, initialMethod, onClose, onSuccess }: 
                 size="sm"
                 onClick={handleProceed}
                 disabled={launching || loadingMethods}
-                className={cn(
-                  "font-bold gap-1.5",
-                  selectedMethod === 'cookie' ? "bg-amber-600 hover:bg-amber-700 text-white" : ""
-                )}
+                className="font-bold gap-1.5"
               >
                 {launching ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
-                ) : selectedMethod === 'cookie' ? (
-                  <Cookie className="h-4 w-4" />
                 ) : (
                   <ExternalLink className="h-4 w-4" />
                 )}
                 <span>
-                  {selectedMethod === 'cookie'
-                    ? (lang === 'vi' ? 'Tiếp tục nhập Cookie' : 'Proceed to enter Cookie')
-                    : (lang === 'vi' ? 'Mở Tab Google & Tiếp tục' : 'Open Tab & Continue')}
+                  {lang === 'vi' ? 'Mở Tab Google & Tiếp tục' : 'Open Tab & Continue'}
                 </span>
               </Button>
             </div>
@@ -401,86 +323,6 @@ export function GoogleConnectModal({ open, initialMethod, onClose, onSuccess }: 
               </Button>
             </div>
           </div>
-        )}
-
-        {/* STEP 3: Connect via Cookie */}
-        {step === 'cookie' && (
-          <form onSubmit={handleConnectCookie} className="grid gap-3.5">
-            <div className="rounded-xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-900/60 p-3 text-xs text-amber-900 dark:text-amber-200">
-              <div className="flex items-center gap-1.5 font-semibold text-amber-800 dark:text-amber-300 mb-1">
-                <Cookie className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                <span>{lang === 'vi' ? 'Hướng dẫn lấy Cookie Google Drive' : 'How to get Google Drive Cookie'}</span>
-              </div>
-              <ol className="list-decimal list-inside space-y-1 text-[11px] text-amber-800/90 dark:text-amber-300/90 leading-relaxed">
-                <li>{lang === 'vi' ? 'Mở Google Drive (drive.google.com) trên trình duyệt đã đăng nhập tài khoản.' : 'Open Google Drive (drive.google.com) in browser where you are logged in.'}</li>
-                <li>{lang === 'vi' ? 'Bấm F12 -> tab Network -> tải lại trang -> bấm vào request "drive.google.com".' : 'Press F12 -> Network tab -> reload -> click any request like "drive.google.com".'}</li>
-                <li>{lang === 'vi' ? 'Trong Request Headers, copy toàn bộ giá trị của Cookie dán vào ô bên dưới.' : 'In Request Headers, copy the full value of Cookie and paste below.'}</li>
-              </ol>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                {lang === 'vi' ? 'Email hoặc Tên gợi nhớ (Tùy chọn)' : 'Email or Account Label (Optional)'}
-              </label>
-              <input
-                type="text"
-                placeholder="vd: myaccount@gmail.com hoặc Drive Khóa học"
-                value={cookieEmail}
-                onChange={(e) => setCookieEmail(e.target.value)}
-                className="w-full text-xs rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-2 text-slate-800 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
-              />
-              <p className="text-[10px] text-slate-400 mt-1">
-                {lang === 'vi' ? 'Hệ thống sẽ tự động phát hiện email từ Cookie nếu bạn để trống.' : 'The system will automatically detect your email from Cookie if left empty.'}
-              </p>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                <span>{lang === 'vi' ? 'Chuỗi Cookie Google Drive' : 'Google Drive Cookie String'} <span className="text-red-500">*</span></span>
-              </label>
-              <textarea
-                rows={4}
-                required
-                placeholder="SID=...; HSID=...; SSID=...; SAPISID=...; ..."
-                value={cookieInput}
-                onChange={(e) => setCookieInput(e.target.value)}
-                className="w-full text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-2.5 text-slate-800 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500 resize-none"
-              />
-            </div>
-
-            <div className="flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400">
-              <ShieldCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-              <span>{lang === 'vi' ? 'Cookie được mã hóa AES-256 an toàn trong cơ sở dữ liệu và chỉ dùng máy chủ HCDrive để tải/stream.' : 'Cookie is securely encrypted with AES-256 and only used by HCDrive server.'}</span>
-            </div>
-
-            <div className="flex items-center justify-between gap-3 pt-2 border-t border-slate-100 dark:border-slate-800">
-              <button
-                type="button"
-                className="text-xs text-slate-500 hover:text-amber-600 font-semibold"
-                onClick={() => setStep('select')}
-              >
-                ← {lang === 'vi' ? 'Chọn lại phương thức' : 'Change method'}
-              </button>
-              <Button
-                type="submit"
-                size="sm"
-                disabled={connectingCookie || !cookieInput.trim()}
-                className="gap-2 bg-amber-600 hover:bg-amber-700 text-white rounded-full px-5 text-xs font-medium"
-              >
-                {connectingCookie ? (
-                  <>
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    <span>{lang === 'vi' ? 'Đang kiểm tra & kết nối...' : 'Verifying & connecting...'}</span>
-                  </>
-                ) : (
-                  <>
-                    <Cookie className="h-3.5 w-3.5" />
-                    <span>{lang === 'vi' ? 'Kiểm tra & Kết nối' : 'Verify & Connect'}</span>
-                  </>
-                )}
-              </Button>
-            </div>
-          </form>
         )}
       </div>
     </DummyModal>

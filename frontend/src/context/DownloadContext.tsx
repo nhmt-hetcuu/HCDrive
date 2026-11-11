@@ -204,6 +204,16 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
     setDownloads((prev) => prev.filter((item) => item.status === 'downloading'))
   }
 
+  const closeAllDownloads = () => {
+    abortControllers.current.forEach((controller) => {
+      try {
+        controller.abort()
+      } catch {}
+    })
+    abortControllers.current.clear()
+    setDownloads([])
+  }
+
   const activeCount = downloads.filter((d) => d.status === 'downloading').length
 
   return (
@@ -235,7 +245,7 @@ export function DownloadProvider({ children }: { children: ReactNode }) {
               </button>
               <button
                 type="button"
-                onClick={() => setDownloads([])}
+                onClick={closeAllDownloads}
                 className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-200 cursor-pointer"
                 title="Đóng"
               >

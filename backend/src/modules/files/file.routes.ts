@@ -8,7 +8,7 @@ import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.
 import { hashToken, randomToken } from '../../utils/crypto.js'
 import { createDriveClientCache, isDriveNotFound, getAuthedGoogleClient, getGoogleDriveClient, getGoogleDriveFileMetadata, listGoogleDriveSharedWithMe, listGoogleDriveSharedByMe, toggleGoogleDriveStar, listGoogleDriveRecent, syncGoogleAppFolderFiles, syncGoogleQuota } from '../google/google.service.js'
 import { deleteS3Object, syncS3Quota, createS3Client, getS3ConfigForAccount } from '../s3/s3.service.js'
-import { streamProviderFile } from './stream-file.js'
+import { streamProviderFile, startBackgroundCacheFile } from './stream-file.js'
 import { googleDownloadExportMimeTypes, normalizeHeaders, withExtension } from './stream-google-file.js'
 import { GetObjectCommand } from '@aws-sdk/client-s3'
 import { Readable } from 'node:stream'
@@ -54,6 +54,23 @@ fileRouter.get('/preview-progress/:token', async (req, res, next) => {
     })
     if (!preview || preview.file.status !== 'active') return res.status(404).json({ code: 'PREVIEW_NOT_FOUND', message: 'Preview token not found.' })
     return res.json(getCacheProgress(preview.file.providerFileId || preview.file.id))
+  } catch (error) {
+    return next(error)
+  }
+})
+
+fileRouter.post('/preview/:token/start-cache', async (req, res, next) => {
+  try {
+    const token = String(req.params.token)
+    const preview = await prisma.filePreviewToken.findFirst({
+      where: { tokenHash: hashToken(token), expiresAt: { gt: new Date() } },
+      include: { file: { include: { connectedAccount: true } } },
+    })
+    if (!preview || preview.file.status !== 'active') {
+      return res.status(404).json({ code: 'PREVIEW_NOT_FOUND', message: 'Preview token not found.' })
+    }
+    const progress = await startBackgroundCacheFile(preview.file, { disposition: 'inline' })
+    return res.json(progress || { status: 'idle' })
   } catch (error) {
     return next(error)
   }
@@ -1025,6 +1042,18 @@ fileRouter.get('/:id/cache-progress', requireAuth, async (req: AuthRequest, res,
   }
 })
 
+fileRouter.post('/:id/start-cache', requireAuth, async (req: AuthRequest, res, next) => {
+  try {
+    const fileId = String(req.params.id)
+    const file = await resolveFileOrFromDrive(fileId, req.user!.id)
+    if (!file) return res.status(404).json({ code: 'FILE_NOT_FOUND', message: 'File not found.' })
+    const progress = await startBackgroundCacheFile(file, { disposition: 'inline' })
+    return res.json(progress || { status: 'idle' })
+  } catch (error) {
+    return next(error)
+  }
+})
+
 fileRouter.delete('/:id', async (req: AuthRequest, res, next) => {
   try {
     const fileId = String(req.params.id)
@@ -1068,13 +1097,22 @@ fileRouter.post('/batch-download', async (req: AuthRequest, res, next) => {
     res.setHeader('Content-Type', 'application/zip')
     res.setHeader('Content-Disposition', 'attachment; filename="hcdrive-download.zip"')
 
-    const archive = new ZipArchive({ zlib: { level: 9 } })
+    const archive = new ZipArchive({ zlib: { level: 6 } })
+    let closed = false
+    req.on('close', () => {
+      closed = true
+      try { archive.abort() } catch {}
+    })
     archive.on('error', (err: any) => {
-      throw err
+      console.error('[batch-download] archive error:', err)
+      if (!res.destroyed) {
+        res.destroy(err)
+      }
     })
     archive.pipe(res)
 
     for (const file of files) {
+      if (closed) break
       try {
         let stream: Readable
         let fileName = file.name

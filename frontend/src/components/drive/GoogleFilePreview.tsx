@@ -108,6 +108,9 @@ export function GoogleFilePreview({
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [open, hasPrev, hasNext, currentIndex])
 
+  // Plyr setup for videos
+  const previewKind = getPreviewKind(file?.mimeType)
+
   // Fetch preview stream token if needed
   useEffect(() => {
     if (!open || !file) {
@@ -122,7 +125,9 @@ export function GoogleFilePreview({
 
     setLoading(true)
     setPreviewError('')
-    setPreviewMode('drive')
+    const isMedia = previewKind === 'video' || (file?.mimeType?.startsWith('audio/') ?? false)
+    // Default video and audio files to HCDrive Direct player for 100% server background caching
+    setPreviewMode(isMedia ? 'stream' : 'drive')
 
     apiFetch<{ path?: string; url: string }>(`/files/${targetId}/preview-token`, { method: 'POST' })
       .then((data) => {
@@ -140,13 +145,26 @@ export function GoogleFilePreview({
         if (isMounted) setLoading(false)
       })
 
+    // Proactively trigger 100% background download task on server for media
+    if (isMedia) {
+      apiFetch<{ status?: string; queuePosition?: number; message?: string }>(`/files/${targetId}/start-cache`, { method: 'POST' })
+        .then((res) => {
+          if (!isMounted) return
+          if (res?.status === 'queued') {
+            showSnackbar(
+              vi
+                ? `Hàng đợi máy chủ: File đang ở vị trí #${res.queuePosition || 1} và sẽ tự động tải khi có lượt trống.`
+                : `Server Queue: File is in position #${res.queuePosition || 1} and will auto-download once a slot frees up.`
+            )
+          }
+        })
+        .catch(() => undefined)
+    }
+
     return () => {
       isMounted = false
     }
-  }, [open, file?.id, file?.providerFileId])
-
-  // Plyr setup for videos
-  const previewKind = getPreviewKind(file?.mimeType)
+  }, [open, file?.id, file?.providerFileId, previewKind])
 
   useEffect(() => {
     if (previewKind === 'video' && videoRef.current && previewUrl) {

@@ -34,10 +34,6 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV APP_PORT=4000
 
-# Install Python and Chromium for Google Drive protected stream extraction
-RUN apk add --no-cache python3 py3-pip chromium chromium-chromedriver && \
-    pip install --no-cache-dir --break-system-packages selenium
-
 # Copy backend dependencies, compiled dist, and prisma
 COPY --from=backend-builder /app/backend/package*.json ./
 COPY --from=backend-builder /app/backend/node_modules ./node_modules

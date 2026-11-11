@@ -3,7 +3,6 @@ import { useLocation, useNavigate, Link } from 'react-router-dom'
 import {
   ArrowLeft,
   ChevronRight,
-  Cookie,
   Folder as FolderIcon,
   FolderPlus,
   HardDrive,
@@ -26,7 +25,6 @@ import { GoogleConnectModal } from '@/components/drive/GoogleConnectModal'
 import { StorageAccountDetailsModal } from '@/components/drive/StorageAccountDetailsModal'
 import { StorageAccountTransfer } from '@/components/drive/StorageAccountTransfer'
 import { UploadRoutingPanel } from '@/components/drive/UploadRoutingPanel'
-import { DriveCookieModal } from '@/components/drive/LibraryDialogs'
 import { API_URL, apiFetch, formatBytes, formatDriveDate } from '@/lib/api'
 import { getAccessToken } from '@/lib/auth'
 import { getStoredUser } from '@/lib/auth'
@@ -43,6 +41,7 @@ type ConnectedAccount = {
   displayName?: string | null
   provider: string
   status: string
+  lastError?: string | null
   isShared?: boolean
   isOwner?: boolean
   ownerEmail?: string | null
@@ -105,7 +104,7 @@ export function QuotaTrackerPage() {
   const [loading, setLoading] = useState(true)
   const [syncingAccountId, setSyncingAccountId] = useState<string | null>(null)
   const [googleModalOpen, setGoogleModalOpen] = useState(false)
-  const [googleInitialMethod, setGoogleInitialMethod] = useState<'rclone' | 'custom' | 'cookie' | undefined>(undefined)
+  const [googleInitialMethod, setGoogleInitialMethod] = useState<'rclone' | 'custom' | undefined>(undefined)
 
   // Storage page large files
   const [largeFiles, setLargeFiles] = useState<FileItem[]>([])
@@ -127,7 +126,6 @@ export function QuotaTrackerPage() {
   const [canConnectStorage, setCanConnectStorage] = useState(false)
   const [accountMenu, setAccountMenu] = useState<{ account: ConnectedAccount; x: number; y: number } | null>(null)
   const [detailsAccountId, setDetailsAccountId] = useState<string | null>(null)
-  const [cookieAccount, setCookieAccount] = useState<ConnectedAccount | null>(null)
   const isAdmin = Boolean(getStoredUser()?.isAdmin)
 
   // S3-compatible storage
@@ -600,15 +598,6 @@ export function QuotaTrackerPage() {
                   <span>{vi ? 'Kết nối S3' : 'Connect S3'}</span>
                 </Button>
                 <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => { setGoogleInitialMethod('cookie'); setGoogleModalOpen(true) }}
-                  className="gap-1.5 text-xs font-medium rounded-full border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/40"
-                >
-                  <Cookie className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                  <span>{vi ? 'Kết nối bằng Cookie' : 'Connect with Cookie'}</span>
-                </Button>
-                <Button
                   variant="tonal"
                   size="sm"
                   onClick={() => { setGoogleInitialMethod(undefined); setGoogleModalOpen(true) }}
@@ -694,10 +683,9 @@ export function QuotaTrackerPage() {
                                   {acc.email}
                                 </span>
                                 <span className="flex flex-wrap items-center gap-1 text-[10px] text-slate-400">
-                                  <span className="uppercase tracking-wider">{acc.provider === 's3' ? 'S3 Storage' : acc.connectedVia === 'cookie' ? 'Google Drive (Cookie)' : 'Google Drive'}</span>
+                                  <span className="uppercase tracking-wider">{acc.provider === 's3' ? 'S3 Storage' : 'Google Drive'}</span>
                                   {acc.isShared ? <span className="rounded-full bg-blue-50 dark:bg-blue-950/50 px-1.5 text-blue-700 dark:text-blue-300">{vi ? 'Dùng chung' : 'Shared'}</span> : null}
                                   {acc.hasProxy ? <span className="rounded-full bg-slate-100 dark:bg-slate-800 px-1.5" title={acc.proxyUrl ?? ''}>Proxy</span> : null}
-                                  {acc.hasCookie ? <span className="rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300 px-1.5 font-medium" title={vi ? 'Đã cài Cookie Google Drive' : 'Drive Cookie configured'}>Cookie</span> : null}
                                   {!acc.isOwner && acc.ownerEmail ? <span>{vi ? `của ${acc.ownerEmail}` : `owned by ${acc.ownerEmail}`}</span> : null}
                                 </span>
                               </div>
@@ -726,12 +714,28 @@ export function QuotaTrackerPage() {
 
                           {/* Status */}
                           <td className="py-2.5 whitespace-nowrap">
-                            <div className="flex items-center gap-1.5">
-                              <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
-                              <span className="text-xs text-emerald-700 dark:text-emerald-400 font-medium">
-                                {vi ? 'Đã kết nối' : 'Connected'}
-                              </span>
-                            </div>
+                            {acc.status === 'expired' ? (
+                              <div className="flex items-center gap-1.5" title={acc.lastError || ''}>
+                                <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" />
+                                <span className="text-xs text-red-600 dark:text-red-400 font-semibold">
+                                  {vi ? 'Hết hạn' : 'Expired'}
+                                </span>
+                              </div>
+                            ) : acc.status === 'error' || acc.lastError ? (
+                              <div className="flex items-center gap-1.5" title={acc.lastError || ''}>
+                                <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" />
+                                <span className="text-xs text-amber-600 dark:text-amber-400 font-semibold">
+                                  {vi ? 'Lỗi' : 'Error'}
+                                </span>
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-1.5">
+                                <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+                                <span className="text-xs text-emerald-700 dark:text-emerald-400 font-medium">
+                                  {vi ? 'Đã kết nối' : 'Connected'}
+                                </span>
+                              </div>
+                            )}
                           </td>
 
                           {/* Actions */}
@@ -966,25 +970,11 @@ export function QuotaTrackerPage() {
           onClose={() => setAccountMenu(null)}
           onDetails={() => { setDetailsAccountId(accountMenu.account.id); setAccountMenu(null) }}
           onProxy={() => { openProxy(accountMenu.account); setAccountMenu(null) }}
-          onCookie={() => { setCookieAccount(accountMenu.account); setAccountMenu(null) }}
           onToggleShared={() => { toggleShared(accountMenu.account); setAccountMenu(null) }}
           onDisconnect={() => { setDisconnectAccountTarget(accountMenu.account); setAccountMenu(null) }}
           onEmptyTrash={accountMenu.account.provider === 'google_drive' && accountMenu.account.isOwner ? () => { setEmptyTrashTarget(accountMenu.account); setAccountMenu(null) } : undefined}
         />
       ) : null}
-
-      {cookieAccount && (
-        <DriveCookieModal
-          accountId={cookieAccount.id}
-          accountEmail={cookieAccount.email}
-          hasCookie={cookieAccount.hasCookie}
-          vi={vi}
-          onClose={() => setCookieAccount(null)}
-          onSaved={() => {
-            loadData().catch(() => undefined)
-          }}
-        />
-      )}
 
       <StorageAccountDetailsModal accountId={detailsAccountId} vi={vi} isAdmin={isAdmin} onClose={() => setDetailsAccountId(null)} onReconnect={canConnectStorage ? () => { setDetailsAccountId(null); setGoogleModalOpen(true) } : undefined} />
 
@@ -1144,7 +1134,7 @@ export function QuotaTrackerPage() {
   )
 }
 
-function AccountActionsMenu({ x, y, account, vi, onClose, onDetails, onProxy, onCookie, onToggleShared, onDisconnect, onEmptyTrash }: {
+function AccountActionsMenu({ x, y, account, vi, onClose, onDetails, onProxy, onToggleShared, onDisconnect, onEmptyTrash }: {
   x: number
   y: number
   account: ConnectedAccount
@@ -1152,7 +1142,6 @@ function AccountActionsMenu({ x, y, account, vi, onClose, onDetails, onProxy, on
   onClose: () => void
   onDetails: () => void
   onProxy: () => void
-  onCookie?: () => void
   onToggleShared: () => void
   onDisconnect: () => void
   onEmptyTrash?: () => void
@@ -1169,18 +1158,11 @@ function AccountActionsMenu({ x, y, account, vi, onClose, onDetails, onProxy, on
           <span className="flex-1">{vi ? 'Xem thông tin' : 'Details'}</span>
         </button>
         {account.provider === 'google_drive' ? (
-          <>
-            <button type="button" className={item} onClick={onProxy}>
-              <Globe className="h-4 w-4 text-slate-500" />
-              <span className="flex-1">{vi ? 'Cài proxy' : 'Proxy settings'}</span>
-              {account.hasProxy ? <span className="text-[11px] text-[#0b57d0] dark:text-[#a8c7fa]">{vi ? 'Đang bật' : 'On'}</span> : null}
-            </button>
-            <button type="button" className={item} onClick={onCookie}>
-              <Cookie className="h-4 w-4 text-slate-500" />
-              <span className="flex-1">{vi ? 'Cookie Google Drive' : 'Drive Cookie'}</span>
-              {account.hasCookie ? <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium">{vi ? 'Đã cài' : 'On'}</span> : null}
-            </button>
-          </>
+          <button type="button" className={item} onClick={onProxy}>
+            <Globe className="h-4 w-4 text-slate-500" />
+            <span className="flex-1">{vi ? 'Cài proxy' : 'Proxy settings'}</span>
+            {account.hasProxy ? <span className="text-[11px] text-[#0b57d0] dark:text-[#a8c7fa]">{vi ? 'Đang bật' : 'On'}</span> : null}
+          </button>
         ) : null}
         <button type="button" className={item} onClick={onToggleShared}>
           <Users className="h-4 w-4 text-slate-500" />

@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { prisma } from '../../config/prisma.js'
+import { redisDel } from '../../config/redis.js'
 import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.js'
 import { hashToken, randomToken } from '../../utils/crypto.js'
 
@@ -55,7 +56,19 @@ apiKeyRouter.post('/', async (req: AuthRequest, res, next) => {
 
 apiKeyRouter.delete('/:id', async (req: AuthRequest, res, next) => {
   try {
-    await prisma.apiKey.updateMany({ where: { id: String(req.params.id), userId: req.user!.id, revokedAt: null }, data: { status: 'revoked', revokedAt: new Date() } })
+    const key = await prisma.apiKey.findFirst({
+      where: { id: String(req.params.id), userId: req.user!.id, revokedAt: null },
+      select: { id: true, keyHash: true },
+    })
+    if (key) {
+      await prisma.apiKey.update({
+        where: { id: key.id },
+        data: { status: 'revoked', revokedAt: new Date() },
+      })
+      if (key.keyHash) {
+        await redisDel(`auth:apikey:${key.keyHash}`)
+      }
+    }
     return res.json({ status: 'ok' })
   } catch (error) {
     return next(error)

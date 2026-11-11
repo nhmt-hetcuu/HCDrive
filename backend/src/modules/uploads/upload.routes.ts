@@ -86,13 +86,23 @@ function byPriority<T extends { account: { id: string; createdAt: Date } }>(item
 
 async function selectAccount(userId: string, sizeBytes: bigint, reservedBytesByAccount = new Map<string, bigint>(), targetAccountId?: string | null) {
   const whereClause = {
-    OR: [
-      { userId },
-      { isShared: true },
+    AND: [
+      {
+        OR: [
+          { userId },
+          { isShared: true },
+        ],
+      },
+      {
+        OR: [
+          { connectedVia: null },
+          { connectedVia: { not: 'cookie' } },
+        ],
+      },
     ],
     provider: { in: ['google_drive', 's3'] },
     status: 'connected',
-    ...(targetAccountId ? { id: targetAccountId } : { connectedVia: { not: 'cookie' } }),
+    ...(targetAccountId ? { id: targetAccountId } : {}),
   }
 
   const accounts = await prisma.connectedAccount.findMany({
@@ -165,8 +175,8 @@ async function selectAccount(userId: string, sizeBytes: bigint, reservedBytesByA
 async function selectAccountForFolder(userId: string, sizeBytes: bigint, reservedBytesByAccount: Map<string, bigint> | undefined, targetAccountId: string | null | undefined, folderId: string | null) {
   if (targetAccountId) return selectAccount(userId, sizeBytes, reservedBytesByAccount, targetAccountId)
   if (folderId) {
-    const folderRecord = await prisma.folder.findFirstOrThrow({ where: { id: folderId, userId, deletedAt: null } })
-    if (folderRecord.connectedAccountId) {
+    const folderRecord = await prisma.folder.findFirst({ where: { id: folderId, userId, deletedAt: null } })
+    if (folderRecord?.connectedAccountId) {
       const preferred = await selectAccount(userId, sizeBytes, reservedBytesByAccount, folderRecord.connectedAccountId)
       if (preferred) return preferred
     }
@@ -260,9 +270,16 @@ export async function handleUpload(req: AuthRequest, res: ExpressResponse, next:
               data: { userId: req.user!.id, connectedAccountId: account.id, folderId, provider: 's3', providerFileId: 'pending', name: fileName, mimeType: meta.mimeType, sizeBytes: meta.sizeBytes, status: 'uploading' },
             })
             providerFileId = buildS3ObjectKey(config, req.user!.id, provisionalFile.id, fileName)
-            await uploadS3Object(config, providerFileId, fileStream, meta.mimeType)
-            await prisma.file.update({ where: { id: provisionalFile.id }, data: { providerFileId, status: 'active' } })
-            completed.push({ ...provisionalFile, providerFileId, status: 'active', sizeBytes: meta.sizeBytes.toString() })
+            let countedBytes = 0n
+            const countingStream = new PassThrough()
+            fileStream.on('data', (chunk: Buffer | Uint8Array) => {
+              countedBytes += BigInt(chunk.length)
+            })
+            fileStream.pipe(countingStream)
+            await uploadS3Object(config, providerFileId, countingStream, meta.mimeType)
+            actualSize = meta.sizeBytes > 0n ? meta.sizeBytes : countedBytes
+            await prisma.file.update({ where: { id: provisionalFile.id }, data: { providerFileId, status: 'active', sizeBytes: actualSize } })
+            completed.push({ ...provisionalFile, providerFileId, status: 'active', sizeBytes: actualSize.toString() })
             logUpload('s3 upload completed', { sessionId: session.id, accountId: account.id, fileName })
           } else {
             const proxyUrl = getAccountProxyUrl(account)

@@ -235,14 +235,22 @@ folderRouter.get('/:id/download', async (req: AuthRequest, res, next) => {
     const safeName = encodeURIComponent(folderName).replace(/['()]/g, escape)
     res.setHeader('Content-Disposition', `attachment; filename="${folderName}.zip"; filename*=UTF-8''${safeName}.zip`)
 
-    const archive = new ZipArchive({ zlib: { level: 9 } })
+    const archive = new ZipArchive({ zlib: { level: 6 } })
+    let closed = false
+    req.on('close', () => {
+      closed = true
+      try { archive.abort() } catch {}
+    })
     archive.on('error', (err: any) => {
       console.error('[folder-download] archive error:', err)
-      throw err
+      if (!res.destroyed) {
+        res.destroy(err)
+      }
     })
     archive.pipe(res)
 
     for (const file of files) {
+      if (closed) break
       try {
         let stream: Readable
         let fileName = file.name

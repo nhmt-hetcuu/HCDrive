@@ -30,6 +30,7 @@ import { Button } from '@/components/ui/button'
 import { BrandLogo } from '@/components/drive/BrandLogo'
 import { Tooltip } from '@/components/ui/tooltip'
 import { HeaderMenus } from '@/components/drive/HeaderMenus'
+import { NotificationBell } from '@/components/drive/NotificationBell'
 import { startDriveAction } from '@/lib/drive-actions'
 import { UserAccountMenu } from '@/components/drive/UserAccountMenu'
 import { apiFetch, formatBytes, formatAvatarUrl } from '@/lib/api'
@@ -72,6 +73,10 @@ type ConnectedAccount = {
   id: string
   email: string
   provider: string
+  status?: string
+  lastError?: string | null
+  hasCookie?: boolean
+  connectedVia?: string | null
 }
 
 type SearchSuggestion = {
@@ -351,6 +356,7 @@ export function DriveLayout() {
 
   // Advanced search filters
   const [accounts, setAccounts] = useState<ConnectedAccount[]>([])
+
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [filterKind, setFilterKind] = useState(searchParams.get('kind') ?? '')
   const [filterAccountId, setFilterAccountId] = useState(searchParams.get('accountId') ?? '')
@@ -400,6 +406,12 @@ export function DriveLayout() {
 
   useEffect(() => {
     loadData()
+
+    // Periodically poll connected accounts status every 30s so dead cookies alert immediately
+    const pollTimer = setInterval(() => {
+      loadData()
+    }, 30_000)
+
     function onStorageChanged() {
       loadData()
     }
@@ -414,6 +426,7 @@ export function DriveLayout() {
     window.addEventListener('9drive:user-updated', onUserUpdated)
     window.addEventListener('hcdrive:user-updated', onUserUpdated)
     return () => {
+      clearInterval(pollTimer)
       window.removeEventListener('9drive:storage-changed', onStorageChanged)
       window.removeEventListener('hcdrive:storage-changed', onStorageChanged)
       window.removeEventListener('9drive:user-updated', onUserUpdated)
@@ -790,6 +803,13 @@ export function DriveLayout() {
           ) : null}
 
           <HeaderMenus lang={lang} />
+
+          {/* System & Error Notification Bell */}
+          <NotificationBell
+            accounts={accounts}
+            onRefresh={loadData}
+            lang={lang}
+          />
 
           <Tooltip
             content={

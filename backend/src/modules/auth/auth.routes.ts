@@ -13,6 +13,7 @@ import { encryptText, hashToken, randomToken } from '../../utils/crypto.js'
 import { signAccessToken } from '../../utils/jwt.js'
 import { createAuditLog } from '../../utils/audit.js'
 import { clientIp, limiters } from '../../middleware/rate-limit.js'
+import { redisDel } from '../../config/redis.js'
 import { publicCaptchaConfig, verifyCaptcha } from '../../utils/captcha.js'
 import { isRegistrationAllowed } from '../../utils/registration.js'
 import { GOOGLE_LINK_SCOPES, linkGoogleIdentity, parkGoogleLink, resolveGoogleLoginUser, takeGoogleLink } from '../../utils/google-identity.js'
@@ -275,6 +276,7 @@ authRouter.post('/refresh', limiters.refresh, async (req, res, next) => {
 authRouter.post('/logout', requireAuth, async (req: AuthRequest, res, next) => {
   try {
     await prisma.userSession.update({ where: { id: req.user!.sessionId }, data: { revokedAt: new Date() } })
+    await redisDel(`auth:session:${req.user!.sessionId}`)
     return res.json({ status: 'ok' })
   } catch (error) {
     return next(error)
@@ -316,6 +318,7 @@ authRouter.delete('/sessions/:id', requireAuth, async (req: AuthRequest, res, ne
       data: { revokedAt: new Date() },
     })
     if (result.count === 0) return res.status(404).json({ code: 'SESSION_NOT_FOUND', message: 'Phiên đăng nhập không tồn tại hoặc đã kết thúc.' })
+    await redisDel(`auth:session:${sessionId}`)
     await createAuditLog(req.user!.id, 'SESSION_REVOKE', 'session', sessionId)
     return res.json({ status: 'ok' })
   } catch (error) {

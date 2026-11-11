@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     volumes:
-      - hcdrive_data:/app/data
+      - ./data:/app/data
     environment:
       DATABASE_URL: ${DATABASE_URL:-file:/app/data/hcdrive.db}
       APP_PORT: 4000
@@ -30,8 +30,22 @@ services:
       INITIAL_USER_NAME: ${INITIAL_USER_NAME:-Admin}
       INITIAL_USER_EMAIL: ${INITIAL_USER_EMAIL:-admin@hcdrive.local}
       INITIAL_USER_PASSWORD: ${INITIAL_USER_PASSWORD:-admin}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+    depends_on:
+      redis:
+        condition: service_healthy
     ports:
       - "${PORT:-5173}:4000"
 
-volumes:
-  hcdrive_data:
+  redis:
+    image: redis:7-alpine
+    container_name: hcdrive_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - ./data/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5

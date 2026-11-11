@@ -4,7 +4,7 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc && (mkdir -p dist/scripts && cp -f src/scripts/*.py dist/scripts/ 2>/dev/null || true)",
+    "build": "tsc",
     "start": "node dist/server.js",
     "start:deploy": "npm run db:migrate:deploy && node dist/server.js",
     "prisma:generate": "prisma generate",
@@ -32,6 +32,7 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "googleapis": "^173.0.0",
+    "ioredis": "^6.0.0",
     "jsonwebtoken": "^9.0.3",
     "prisma": "^6.19.3",
     "socks": "^2.8.10",

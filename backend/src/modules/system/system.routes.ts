@@ -6,6 +6,7 @@ import { z } from 'zod'
 import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.js'
 import { requireAdmin, isAdminUser } from '../../middleware/admin.middleware.js'
 import { prisma } from '../../config/prisma.js'
+import { redisPublish } from '../../config/redis.js'
 import { decryptText, encryptText } from '../../utils/crypto.js'
 import { hashPassword } from '../../utils/password.js'
 import { getCustomConfig } from '../google/google.service.js'
@@ -453,6 +454,12 @@ systemRouter.patch('/temp-cache', async (req, res, next) => {
         update: { value: String(body.enabled) },
       })
     }
+
+    await redisPublish('hcdrive:temp-cache:config-updated', {
+      ttlMinutes: body.ttlMinutes,
+      maxGB: body.maxGB,
+      enabled: body.enabled,
+    }).catch(() => undefined)
 
     return res.json({
       status: 'ok',

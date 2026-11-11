@@ -1,12 +1,12 @@
+import fs from 'node:fs'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import type { Response } from 'express'
 import type { ConnectedAccount, File } from '@prisma/client'
 import { prisma } from '../../config/prisma.js'
-import { getAuthedGoogleClient, getGoogleDriveClient, getAccountCookie } from '../google/google.service.js'
+import { getAuthedGoogleClient, getGoogleDriveClient } from '../google/google.service.js'
 import { getAccountProxyUrl, getUndiciDispatcher } from '../../utils/proxy.js'
-import { streamCachedOrFetch } from '../../services/temp-cache.service.js'
-import { resolveGoogleVideoStream } from './gdrive-stream-helper.js'
+import { streamCachedOrFetch, readCacheMeta, getCacheDataPath, triggerBackgroundDownload, getCacheProgress, type CacheProgress } from '../../services/temp-cache.service.js'
 
 type FileWithAccount = File & { connectedAccount: ConnectedAccount }
 type StreamOptions = { disposition?: 'inline' | 'attachment'; exportMimeType?: string; exportExtension?: string }
@@ -46,9 +46,49 @@ export async function attemptGoogleBypassStream(
   account: ConnectedAccount,
   fileId: string,
   resourceKey: string | null = null,
-  range?: string
+  range?: string,
+  mimeHint?: string
 ): Promise<globalThis.Response | null> {
   try {
+    // 0. Check if file is ALREADY downloaded and saved on SSD disk!
+    // If present on disk, serve directly from SSD with ZERO Selenium and ZERO network requests!
+    const cached = readCacheMeta(fileId)
+    if (cached) {
+      const dataPath = getCacheDataPath(fileId)
+      if (fs.existsSync(dataPath)) {
+        const stat = fs.statSync(dataPath)
+        const fileSize = stat.size
+        console.log(`[bypass] File ${fileId} (${cached.fileName}) already on SSD disk (${(fileSize / (1024 * 1024)).toFixed(2)} MB). Serving directly from disk with ZERO Selenium!`)
+
+        if (range && typeof range === 'string') {
+          const parts = range.replace(/bytes=/, '').split('-')
+          const start = parseInt(parts[0], 10) || 0
+          const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1
+          const chunksize = end - start + 1
+          const fileStream = fs.createReadStream(dataPath, { start, end })
+          return new Response(Readable.toWeb(fileStream) as any, {
+            status: 206,
+            headers: {
+              'Content-Type': cached.contentType || 'application/octet-stream',
+              'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+              'Content-Length': chunksize.toString(),
+              'Accept-Ranges': 'bytes',
+            },
+          })
+        }
+
+        const fileStream = fs.createReadStream(dataPath)
+        return new Response(Readable.toWeb(fileStream) as any, {
+          status: 200,
+          headers: {
+            'Content-Type': cached.contentType || 'application/octet-stream',
+            'Content-Length': fileSize.toString(),
+            'Accept-Ranges': 'bytes',
+          },
+        })
+      }
+    }
+
     let authHeaders: Record<string, string> = {}
     let accessToken: string | null = null
     let auth: any = null
@@ -64,110 +104,6 @@ export async function attemptGoogleBypassStream(
     const dispatcher = getUndiciDispatcher(getAccountProxyUrl(account))
     const rkHeaders = resourceKeyHeaders(fileId, resourceKey)
     const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    const cookie = await getAccountCookie(account)
-    const cookieHeader: Record<string, string> = cookie ? { Cookie: cookie } : {}
-
-    // Strategy 0: Specialized Video Playback Stream Bypass via Python Helper (for protected/restricted videos)
-    if (cookie) {
-      const resolved = await resolveGoogleVideoStream(account, fileId).catch(() => null)
-      if (resolved && resolved.videoUrl) {
-        const videoRes = await fetch(resolved.videoUrl, {
-          dispatcher,
-          headers: {
-            'User-Agent': resolved.userAgent,
-            'Referer': 'https://drive.google.com/',
-            ...(range ? { Range: range } : {}),
-            'Accept': '*/*',
-          },
-        } as any).catch(() => null)
-
-        if (videoRes && (videoRes.status === 200 || videoRes.status === 206)) {
-          return videoRes
-        }
-      }
-
-      // Strategy 0.1: Authenticated direct download with Google Drive Cookie
-      const cookieUcUrl = `https://drive.usercontent.google.com/download?id=${fileId}&export=download&confirm=t${resourceKey ? `&resourcekey=${resourceKey}` : ''}`
-      const cookieRes = await fetch(cookieUcUrl, {
-        dispatcher,
-        headers: {
-          'Cookie': cookie,
-          ...rkHeaders,
-          ...(range ? { Range: range } : {}),
-          'User-Agent': ua,
-          'Referer': 'https://drive.google.com/',
-          'Accept': '*/*',
-        },
-        redirect: 'follow',
-      } as any).catch(() => null)
-
-      if (cookieRes && (cookieRes.status === 200 || cookieRes.status === 206)) {
-        const cType = cookieRes.headers.get('content-type') ?? ''
-        if (!cType.includes('text/html') || cookieRes.headers.get('content-disposition')?.includes('attachment')) {
-          return cookieRes
-        }
-        // Virus scan / large file confirmation form
-        const html = await cookieRes.text().catch(() => '')
-        const formMatch = html.match(/<form[^>]+action="([^"]+)"/i)
-        if (formMatch?.[1]) {
-          let actionUrl = formMatch[1].replace(/&amp;/g, '&')
-          if (actionUrl.startsWith('/')) actionUrl = `https://drive.usercontent.google.com${actionUrl}`
-          const inputMatches = html.matchAll(/<input[^>]+name="([^"]+)"[^>]+value="([^"]*)"/gi)
-          const params = new URLSearchParams()
-          for (const m of inputMatches) params.append(m[1], m[2])
-          const confirmUrl = actionUrl.includes('?') ? `${actionUrl}&${params.toString()}` : `${actionUrl}?${params.toString()}`
-          const formRes = await fetch(confirmUrl, {
-            dispatcher,
-            headers: {
-              'Cookie': cookie,
-              ...rkHeaders,
-              ...(range ? { Range: range } : {}),
-              'User-Agent': ua,
-              'Referer': 'https://drive.google.com/',
-              'Accept': '*/*',
-            },
-            redirect: 'follow',
-          } as any).catch(() => null)
-          if (formRes && (formRes.status === 200 || formRes.status === 206)) {
-            const formCType = formRes.headers.get('content-type') ?? ''
-            if (!formCType.includes('text/html') || formRes.headers.get('content-disposition')?.includes('attachment')) {
-              return formRes
-            }
-          }
-        }
-      }
-
-      // Check authenticated view page for direct videoplayback chunks
-      const authedViewUrl = `https://drive.google.com/file/d/${fileId}/view${resourceKey ? `?resourcekey=${resourceKey}` : ''}`
-      const authedViewRes = await fetch(authedViewUrl, {
-        dispatcher,
-        headers: {
-          'Cookie': cookie,
-          ...rkHeaders,
-          'User-Agent': ua,
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        },
-      } as any).catch(() => null)
-
-      if (authedViewRes && authedViewRes.ok) {
-        const html = await authedViewRes.text().catch(() => '')
-        const streamMatch = html.match(/(https?:\\\/\\\/[^\s"']+(?:googlevideo\.com|drive\.google\.com)\\\/videoplayback[^\s"']*)/i)
-          || html.match(/(https?:\/\/[^\s"']+(?:googlevideo\.com|drive\.google\.com)\/videoplayback[^\s"']*)/i)
-        if (streamMatch?.[1]) {
-          const streamUrl = streamMatch[1].replace(/\\u0026/g, '&').replace(/\\\//g, '/')
-          const videoRes = await fetch(streamUrl, {
-            dispatcher,
-            headers: {
-              'Cookie': cookie,
-              ...(range ? { Range: range } : {}),
-              'User-Agent': ua,
-              'Referer': 'https://drive.google.com/',
-            },
-          } as any).catch(() => null)
-          if (videoRes && (videoRes.status === 200 || videoRes.status === 206)) return videoRes
-        }
-      }
-    }
 
     // Strategy 1: Modern endpoint drive.usercontent.google.com with Bearer token & access_token query param
     const usercontentUrl = `https://drive.usercontent.google.com/download?id=${fileId}&export=download&confirm=t&authuser=0${accessToken ? `&access_token=${accessToken}` : ''}${resourceKey ? `&resourcekey=${resourceKey}` : ''}`
@@ -176,7 +112,6 @@ export async function attemptGoogleBypassStream(
       headers: {
         ...authHeaders,
         ...rkHeaders,
-        ...cookieHeader,
         ...(range ? { Range: range } : {}),
         'User-Agent': ua,
         'Referer': 'https://drive.google.com/',
@@ -229,7 +164,6 @@ export async function attemptGoogleBypassStream(
       headers: {
         ...authHeaders,
         ...rkHeaders,
-        ...cookieHeader,
         ...(range ? { Range: range } : {}),
         'User-Agent': ua,
         'Referer': 'https://drive.google.com/',
@@ -336,6 +270,7 @@ export async function streamGoogleFile(original: FileWithAccount, range: string 
 
   // Cache video/file on server for 30 minutes and stream with Range support
   const cacheKey = exportTarget ? `${file.providerFileId}_export_${exportTarget.extension}` : file.providerFileId
+  let isBypassUsed = false
   const cachedSuccess = await streamCachedOrFetch(
     cacheKey,
     responseFileName,
@@ -356,9 +291,10 @@ export async function streamGoogleFile(original: FileWithAccount, range: string 
           return null
         }
         // Attempt bypass for restricted Google Drive files (e.g. 403 cannotDownloadFile)
-        const bypass = await attemptGoogleBypassStream(original.connectedAccount, file.providerFileId, null, rangeForFetch)
+        const bypass = await attemptGoogleBypassStream(original.connectedAccount, file.providerFileId, null, rangeForFetch, file.mimeType)
         if (bypass && (bypass.status === 200 || bypass.status === 206)) {
           dlResponse = bypass
+          isBypassUsed = true
         } else {
           return null
         }
@@ -377,6 +313,7 @@ export async function streamGoogleFile(original: FileWithAccount, range: string 
     {
       disposition: options.disposition,
       fileName: responseFileName,
+      isPermanent: isBypassUsed, // Only bypass files are permanently saved to disk; normal files follow the admin configured TTL
     }
   )
 
@@ -425,4 +362,73 @@ export async function streamGoogleFile(original: FileWithAccount, range: string 
   await pipeline(Readable.fromWeb(response.body as any), res).catch(() => {
     if (!res.destroyed) res.destroy()
   })
+}
+
+/**
+ * Initiates an asynchronous background download of the Google Drive file to server SSD cache.
+ * Runs completely in the background to 100% completion even if the user exits the app.
+ */
+export async function startBackgroundCacheGoogleFile(original: FileWithAccount, options: StreamOptions = {}): Promise<CacheProgress> {
+  const proxyUrl = getAccountProxyUrl(original.connectedAccount)
+  const dispatcher = getUndiciDispatcher(proxyUrl)
+  const auth = await getAuthedGoogleClient(original.connectedAccount)
+  const headers = normalizeHeaders(await auth.getRequestHeaders())
+
+  let file = original
+  if (original.mimeType === 'application/vnd.google-apps.shortcut' && original.shortcutTargetId) {
+    const target = await getGoogleDriveClient(auth, proxyUrl).files.get({ fileId: original.shortcutTargetId, fields: 'id,name,mimeType', supportsAllDrives: true })
+    file = { ...original, providerFileId: original.shortcutTargetId, name: target.data.name ?? original.name, mimeType: target.data.mimeType ?? original.mimeType }
+  }
+  const exportTarget = options.exportMimeType && file.mimeType.startsWith('application/vnd.google-apps.')
+    ? { mimeType: options.exportMimeType, extension: options.exportExtension ?? '' }
+    : (options.disposition === 'inline' ? googlePreviewExportMimeTypes : googleDownloadExportMimeTypes)[file.mimeType]
+  const responseMimeType = exportTarget?.mimeType ?? file.mimeType
+  const responseFileName = exportTarget ? withExtension(file.name, exportTarget.extension) : file.name
+  const url = exportTarget
+    ? `https://www.googleapis.com/drive/v3/files/${file.providerFileId}/export?mimeType=${encodeURIComponent(exportTarget.mimeType)}`
+    : `https://www.googleapis.com/drive/v3/files/${file.providerFileId}?alt=media`
+
+  const cacheKey = exportTarget ? `${file.providerFileId}_export_${exportTarget.extension}` : file.providerFileId
+
+  const downloadFn = async (rangeForFetch?: string) => {
+    let dlResponse = await fetch(url, {
+      dispatcher,
+      headers: {
+        ...headers,
+        ...(rangeForFetch && !exportTarget ? { Range: rangeForFetch } : {}),
+      },
+    } as any)
+
+    if (!dlResponse.ok) {
+      if (dlResponse.status === 404 && file === original) {
+        await prisma.file.update({ where: { id: file.id }, data: { status: 'deleted', deletedAt: new Date() } }).catch(() => undefined)
+        return null
+      }
+      const bypass = await attemptGoogleBypassStream(original.connectedAccount, file.providerFileId, null, rangeForFetch, file.mimeType)
+      if (bypass && (bypass.status === 200 || bypass.status === 206)) {
+        dlResponse = bypass
+      } else {
+        return null
+      }
+    }
+
+    if (!dlResponse.body) return null
+    const cLength = dlResponse.headers.get('content-length')
+    return {
+      stream: dlResponse.body,
+      contentType: responseMimeType,
+      sizeBytes: cLength ? parseInt(cLength, 10) : undefined,
+      contentRange: dlResponse.headers.get('content-range') || undefined,
+      status: dlResponse.status,
+    }
+  }
+
+  // Trigger background download to 100% completion
+  triggerBackgroundDownload(cacheKey, responseFileName, downloadFn, {
+    isPermanent: true,
+    fileName: responseFileName,
+    disposition: options.disposition || 'inline',
+  }).catch(() => undefined)
+
+  return getCacheProgress(cacheKey)
 }

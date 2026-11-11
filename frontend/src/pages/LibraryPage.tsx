@@ -6,7 +6,6 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
-  Cookie,
   Download,
   Circle,
   ExternalLink,
@@ -42,7 +41,7 @@ import { DummyModal } from '@/components/drive/DummyModal'
 import { StreamProgressBar } from '@/components/StreamProgressBar'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { CourseDetailsModal, DriveCookieModal, SaveToDriveModal, ShareCourseModal, lessonDownloadUrl, startCourseDownload } from '@/components/drive/LibraryDialogs'
+import { CourseDetailsModal, SaveToDriveModal, ShareCourseModal, lessonDownloadUrl, startCourseDownload } from '@/components/drive/LibraryDialogs'
 import { useMenuPosition } from '@/hooks/useMenuPosition'
 
 // Library: Drive links other people shared with the user (a bought course, a lesson folder, a document),
@@ -826,8 +825,6 @@ function LessonView({ link, vi, onBack, onEdit, editing, onEdited, onCloseEdit, 
   const [items, setItems] = useState<Lesson[] | null>(null)
   const [error, setError] = useState('')
   const [account, setAccount] = useState<{ id: string; email: string } | null>(null)
-  const [hasCookie, setHasCookie] = useState(false)
-  const [cookieOpen, setCookieOpen] = useState(false)
   const [current, setCurrent] = useState<Lesson | null>(null)
   const [shareOpen, setShareOpen] = useState(false)
   const [saveOpen, setSaveOpen] = useState(false)
@@ -842,12 +839,11 @@ function LessonView({ link, vi, onBack, onEdit, editing, onEdited, onCloseEdit, 
     const params = new URLSearchParams()
     if (folder.id) params.set('folderId', folder.id)
     if (folder.rk) params.set('rk', folder.rk)
-    apiFetch<{ items: Lesson[]; account: { id: string; email: string }; hasCookie?: boolean }>(`/library/${link.id}/items${params.toString() ? `?${params}` : ''}`)
+    apiFetch<{ items: Lesson[]; account: { id: string; email: string } }>(`/library/${link.id}/items${params.toString() ? `?${params}` : ''}`)
       .then((data) => {
         if (cancelled) return
         setItems(data.items)
         setAccount(data.account)
-        if (data.hasCookie !== undefined) setHasCookie(Boolean(data.hasCookie))
         // A single shared file opens straight away if in course mode.
         if (isCourse && !link.isFolder && data.items[0]) setCurrent(data.items[0])
       })
@@ -946,17 +942,6 @@ function LessonView({ link, vi, onBack, onEdit, editing, onEdited, onCloseEdit, 
           <Download className="mr-1.5 h-4 w-4" />{isCourse ? (path.length > 1 ? (vi ? 'Tải chương này' : 'Download chapter') : vi ? 'Tải khóa học' : 'Download course') : (path.length > 1 ? (vi ? 'Tải thư mục này' : 'Download folder') : vi ? 'Tải tất cả (ZIP)' : 'Download all (ZIP)')}
         </Button>
         <Button size="sm" variant="ghost" onClick={() => setSaveOpen(true)}><HardDriveDownload className="mr-1.5 h-4 w-4" />{vi ? 'Lưu vào Drive' : 'Save to Drive'}</Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() => setCookieOpen(true)}
-          className={cn(hasCookie && 'text-emerald-700 dark:text-emerald-400 font-medium')}
-          title={vi ? 'Cấu hình Cookie Google Drive cho video bảo vệ quyền riêng tư' : 'Configure Google Drive Cookie for protected videos'}
-        >
-          <Cookie className="mr-1.5 h-4 w-4" />
-          <span className="hidden sm:inline">{vi ? 'Cookie Drive' : 'Drive Cookie'}</span>
-          {hasCookie && <span className="ml-1 h-1.5 w-1.5 rounded-full bg-emerald-500" />}
-        </Button>
         <a href={link.url} target="_blank" rel="noreferrer" className="inline-flex h-8 items-center rounded-full px-3 text-xs text-[#0b57d0] hover:bg-[#0b57d0]/10 dark:text-[#a8c7fa]">
           <ExternalLink className="mr-1.5 h-4 w-4" />Google Drive
         </a>
@@ -971,8 +956,6 @@ function LessonView({ link, vi, onBack, onEdit, editing, onEdited, onCloseEdit, 
                 lesson={current}
                 vi={vi}
                 accountEmail={account?.email}
-                hasCookie={hasCookie}
-                onConfigureCookie={() => setCookieOpen(true)}
                 onPosition={(seconds) => saveProgress(current.id, { positionSeconds: seconds })}
                 onEnded={() => saveProgress(current.id, { completed: true })}
               />
@@ -1261,24 +1244,6 @@ function LessonView({ link, vi, onBack, onEdit, editing, onEdited, onCloseEdit, 
           setAccount(updated.account)
         }}
       />
-      {cookieOpen && (
-        <DriveCookieModal
-          linkId={link.id}
-          accountId={account?.id}
-          accountEmail={account?.email}
-          hasCookie={hasCookie}
-          vi={vi}
-          onClose={() => setCookieOpen(false)}
-          onSaved={(newHasCookie) => {
-            setHasCookie(newHasCookie)
-            if (current) {
-              const c = current
-              setCurrent(null)
-              setTimeout(() => setCurrent(c), 50)
-            }
-          }}
-        />
-      )}
       <FolderFilePreviewModal
         file={previewItem}
         files={items ? items.filter((i) => !i.isFolder) : []}
@@ -1458,16 +1423,12 @@ function LessonPlayer({
   lesson,
   vi,
   accountEmail,
-  hasCookie,
-  onConfigureCookie,
   onPosition,
   onEnded,
 }: {
   lesson: Lesson
   vi: boolean
   accountEmail?: string
-  hasCookie?: boolean
-  onConfigureCookie?: () => void
   onPosition: (seconds: number) => void
   onEnded: () => void
 }) {
@@ -1607,23 +1568,6 @@ function LessonPlayer({
               )}
             </span>
             <div className="flex items-center gap-2">
-              {onConfigureCookie && (
-                <button
-                  type="button"
-                  onClick={onConfigureCookie}
-                  className={cn(
-                    'flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition cursor-pointer',
-                    hasCookie
-                      ? 'text-emerald-700 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950/40'
-                      : 'text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800'
-                  )}
-                  title={vi ? 'Cấu hình Cookie Google Drive cho video bảo vệ riêng tư' : 'Configure Google Drive Cookie for protected videos'}
-                >
-                  <Cookie className="h-3 w-3" />
-                  <span>{vi ? 'Cookie' : 'Cookie'}</span>
-                  {hasCookie && <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />}
-                </button>
-              )}
               <a
                 href={authedViewUrl}
                 target="_blank"
@@ -1673,21 +1617,6 @@ function LessonPlayer({
         </p>
 
         <div className="mt-5 flex flex-wrap items-center justify-center gap-2.5">
-          {onConfigureCookie && (
-            <button
-              type="button"
-              onClick={onConfigureCookie}
-              className="inline-flex items-center gap-2 rounded-xl bg-[#0b57d0] px-5 py-2.5 text-xs font-semibold text-white shadow-sm hover:bg-[#0b57d0]/90 transition cursor-pointer"
-            >
-              <Cookie className="h-4 w-4" />
-              <span>
-                {hasCookie
-                  ? (vi ? 'Cập nhật Cookie Google Drive' : 'Update Google Drive Cookie')
-                  : (vi ? 'Cấu hình Cookie Google Drive để phát trực tiếp' : 'Configure Google Drive Cookie for Direct Stream')}
-              </span>
-            </button>
-          )}
-
           <a
             href={authedViewUrl}
             target="_blank"
