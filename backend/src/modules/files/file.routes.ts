@@ -486,6 +486,12 @@ fileRouter.get('/shared-with-me', async (req: AuthRequest, res, next) => {
       }
     }
 
+    for (const item of allItems) {
+      if (!item.thumbnailUrl && item.mimeType && !item.isFolder) {
+        item.thumbnailUrl = thumbnailUrlFor({ id: item.id, providerFileId: item.id, provider: 'google_drive', mimeType: item.mimeType })
+      }
+    }
+
     // Sort newest shared first
     allItems.sort((a, b) => {
       const timeA = new Date(a.sharedWithMeTime || a.modifiedTime || 0).getTime()
@@ -614,6 +620,7 @@ fileRouter.get('/starred', async (req: AuthRequest, res, next) => {
         folderId: file.folderId,
         folderName: file.folder?.name ?? null,
         webViewLink: file.provider === 'google_drive' ? buildGoogleDriveWebViewLink(file.providerFileId, file.connectedAccount.email) : null,
+        thumbnailUrl: thumbnailUrlFor(file),
         starred: true,
       })),
     })
@@ -672,9 +679,16 @@ fileRouter.get('/recent', async (req: AuthRequest, res, next) => {
           accountEmail: f.connectedAccount?.email,
           accountId: f.connectedAccountId,
           webViewLink: f.provider === 'google_drive' ? buildGoogleDriveWebViewLink(f.providerFileId, f.connectedAccount?.email) : null,
+          thumbnailUrl: thumbnailUrlFor(f),
           webContentLink: null,
           isFolder: false,
         })
+      }
+    }
+
+    for (const item of allItems) {
+      if (!item.thumbnailUrl && item.mimeType && !item.isFolder) {
+        item.thumbnailUrl = thumbnailUrlFor({ id: item.id, providerFileId: item.id, provider: 'google_drive', mimeType: item.mimeType })
       }
     }
 
@@ -854,7 +868,8 @@ fileRouter.get('/:id', async (req: AuthRequest, res, next) => {
       file: {
         ...file,
         sizeBytes: file.sizeBytes.toString(),
-        webViewLink: file.provider === 'google_drive' ? `https://drive.google.com/file/d/${file.providerFileId}/view` : null,
+        webViewLink: file.provider === 'google_drive' ? buildGoogleDriveWebViewLink(file.providerFileId, file.connectedAccount?.email) : null,
+        thumbnailUrl: thumbnailUrlFor(file),
       }
     })
   } catch (error) {

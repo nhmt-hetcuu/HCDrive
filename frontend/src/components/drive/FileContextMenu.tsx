@@ -136,7 +136,11 @@ export function FileContextMenu({
           <MenuItem
             icon={ExternalLink}
             label={t('action.open_google_drive', 'Mở trên Google Drive')}
-            onClick={() => window.open(`https://drive.google.com/file/d/${file.providerFileId}/view`, '_blank')}
+            onClick={() => {
+              const authUser = file.accountEmail ? `?authuser=${encodeURIComponent(file.accountEmail)}` : ''
+              const url = file.webViewLink || `https://drive.google.com/file/d/${file.providerFileId}/view${authUser}`
+              window.open(url, '_blank')
+            }}
           />
         )}
 

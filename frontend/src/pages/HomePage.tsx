@@ -13,7 +13,7 @@ import {
 import { apiFetch, API_URL, formatDriveDate } from '@/lib/api'
 import { useLanguage } from '@/context/LanguageContext'
 import { useSnackbar } from '@/context/SnackbarContext'
-import { getAccessToken } from '@/lib/auth'
+import { useDownload } from '@/context/DownloadContext'
 import { Button } from '@/components/ui/button'
 import { DriveToolbar } from '@/components/drive/DriveToolbar'
 import { DetailsPanel } from '@/components/drive/DetailsPanel'
@@ -35,6 +35,7 @@ interface SuggestedFileItem extends FileItem {
 export function HomePage() {
   const { lang } = useLanguage()
   const { showSnackbar } = useSnackbar()
+  const { startDownload } = useDownload()
   const navigate = useNavigate()
   const vi = lang === 'vi'
 
@@ -87,8 +88,12 @@ export function HomePage() {
         folders: FolderItem[]
         files: SuggestedFileItem[]
       }>('/home/suggestions')
+      const mapped = (data.files || []).map((f: any) => ({
+        ...f,
+        thumbnailLink: f.thumbnailUrl ? `${API_URL}${f.thumbnailUrl}` : f.thumbnailLink,
+      }))
       setFolders(data.folders || [])
-      setFiles(data.files || [])
+      setFiles(mapped)
     } catch (err: any) {
       console.warn('Failed to load home suggestions:', err)
       // Fallback: load recent files
@@ -169,26 +174,11 @@ export function HomePage() {
   async function handleDownloadFile(file?: SuggestedFileItem) {
     const target = file || selectedFile
     if (!target) return
+    const targetId = target.id || target.providerFileId
+    if (!targetId) return
     try {
-      if (target.id) {
-        const res = await fetch(`${API_URL}/files/${target.id}/download`, {
-          headers: { Authorization: `Bearer ${getAccessToken()}` },
-        })
-        if (res.ok) {
-          const blob = await res.blob()
-          const url = URL.createObjectURL(blob)
-          const a = document.createElement('a')
-          a.href = url
-          a.download = target.name
-          a.click()
-          window.setTimeout(() => URL.revokeObjectURL(url), 1000)
-          showSnackbar(vi ? `Đang tải xuống ${target.name}` : `Downloading ${target.name}`)
-          return
-        }
-      }
-      if (target.providerFileId) {
-        window.open(`https://drive.google.com/uc?id=${target.providerFileId}&export=download`, '_blank')
-      }
+      showSnackbar(vi ? `Đang bắt đầu tải ${target.name}...` : `Starting download of ${target.name}...`)
+      await startDownload(`/files/${targetId}/download`, target.name, { auth: true })
     } catch (err: any) {
       showSnackbar(vi ? 'Tải tệp thất bại' : 'Download failed')
     }

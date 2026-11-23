@@ -1,9 +1,10 @@
 import { Router } from 'express'
 import { prisma } from '../../config/prisma.js'
 import { requireAuth, type AuthRequest } from '../../middleware/auth.middleware.js'
-import { getAuthedGoogleClient, getGoogleDriveClient } from '../google/google.service.js'
+import { getAuthedGoogleClient, getGoogleDriveClient, buildGoogleDriveWebViewLink, appendAuthUser } from '../google/google.service.js'
 import { getAccountProxyUrl } from '../../utils/proxy.js'
 import { buildMergedFolders, loadVisibleFolders } from '../folders/merged-folders.js'
+import { thumbnailUrlFor } from '../google/drive-features.js'
 
 export const homeRouter = Router()
 homeRouter.use(requireAuth)
@@ -135,7 +136,8 @@ homeRouter.get('/suggestions', async (req: AuthRequest, res, next) => {
           folderName: folderName || null,
           folderId: dbFile?.folderId || null,
           starred: Boolean(f.starred),
-          webViewLink: f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`,
+          webViewLink: appendAuthUser(f.webViewLink || (f.id ? buildGoogleDriveWebViewLink(f.id, account.email) : ''), account.email),
+          thumbnailUrl: thumbnailUrlFor({ id: dbFile?.id || f.id, providerFileId: f.id, provider: 'google_drive', mimeType: f.mimeType || 'application/octet-stream' }),
         })
       }
     }
@@ -163,7 +165,8 @@ homeRouter.get('/suggestions', async (req: AuthRequest, res, next) => {
         folderName: f.folder?.name || null,
         folderId: f.folderId || null,
         starred: false,
-        webViewLink: f.provider === 'google_drive' ? `https://drive.google.com/file/d/${f.providerFileId}/view` : null,
+        webViewLink: f.provider === 'google_drive' ? buildGoogleDriveWebViewLink(f.providerFileId, f.connectedAccount?.email) : null,
+        thumbnailUrl: thumbnailUrlFor(f),
       })
     }
 

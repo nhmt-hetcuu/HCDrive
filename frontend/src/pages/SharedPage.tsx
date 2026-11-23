@@ -9,7 +9,7 @@ import {
 import { apiFetch, API_URL, formatBytes, formatDriveDate } from '@/lib/api'
 import { useLanguage } from '@/context/LanguageContext'
 import { useSnackbar } from '@/context/SnackbarContext'
-import { getAccessToken } from '@/lib/auth'
+import { useDownload } from '@/context/DownloadContext'
 import { getFileVisual } from '@/components/drive/DriveGridView'
 import { DetailsPanel } from '@/components/drive/DetailsPanel'
 import { FileContextMenu } from '@/components/drive/FileContextMenu'
@@ -76,6 +76,7 @@ type Invite = {
 export function SharedPage() {
   const { lang } = useLanguage()
   const { showSnackbar } = useSnackbar()
+  const { startDownload } = useDownload()
   const vi = lang === 'vi'
 
   const [activeTab, setActiveTab] = useState<'with_me' | 'by_me'>('with_me')
@@ -129,7 +130,7 @@ export function SharedPage() {
             accountEmail: item.accountEmail || 'Google Drive',
             accountId: item.accountId || '',
             source: 'google_drive',
-            webViewLink: item.webViewLink || (item.id ? `https://drive.google.com/file/d/${item.id}/view` : null),
+            webViewLink: item.webViewLink || (item.id ? (item.accountEmail ? `https://drive.google.com/file/d/${item.id}/view?authuser=${encodeURIComponent(item.accountEmail)}` : `https://drive.google.com/file/d/${item.id}/view`) : null),
             isFolder: item.isFolder || false,
           })
         }
@@ -339,26 +340,11 @@ export function SharedPage() {
   async function handleDownloadItem(item?: any) {
     const target = item || activeItem
     if (!target) return
+    const targetId = target.id || target.providerFileId
+    if (!targetId) return
     try {
-      if (target.id) {
-        const res = await fetch(`${API_URL}/files/${target.id}/download`, {
-          headers: { Authorization: `Bearer ${getAccessToken()}` },
-        })
-        if (res.ok) {
-          const blob = await res.blob()
-          const url = URL.createObjectURL(blob)
-          const a = document.createElement('a')
-          a.href = url
-          a.download = target.name
-          a.click()
-          window.setTimeout(() => URL.revokeObjectURL(url), 1000)
-          showSnackbar(vi ? `Đang tải xuống ${target.name}` : `Downloading ${target.name}`)
-          return
-        }
-      }
-      if (target.id) {
-        window.open(`https://drive.google.com/uc?id=${target.id}&export=download`, '_blank')
-      }
+      showSnackbar(vi ? `Đang bắt đầu tải ${target.name}...` : `Starting download of ${target.name}...`)
+      await startDownload(`/files/${targetId}/download`, target.name, { auth: true })
     } catch {
       showSnackbar(vi ? 'Tải tệp thất bại' : 'Download failed')
     }
@@ -378,6 +364,9 @@ export function SharedPage() {
       access: item.ownerName || 'Shared',
       webViewLink: item.webViewLink,
       providerFileId: item.id,
+      accountEmail: item.accountEmail,
+      accountId: item.accountId,
+      thumbnailLink: item.thumbnailUrl ? `${API_URL}${item.thumbnailUrl}` : (item.thumbnailLink || null),
     }
     setContextMenu({ x: e.clientX, y: e.clientY, file: fileItem })
   }
@@ -399,6 +388,9 @@ export function SharedPage() {
       access: singleSelectedItem.ownerName || 'Shared',
       webViewLink: singleSelectedItem.webViewLink,
       providerFileId: singleSelectedItem.providerFileId || singleSelectedItem.id,
+      accountEmail: singleSelectedItem.accountEmail,
+      accountId: singleSelectedItem.accountId,
+      thumbnailLink: singleSelectedItem.thumbnailUrl ? `${API_URL}${singleSelectedItem.thumbnailUrl}` : (singleSelectedItem.thumbnailLink || null),
     }
   }, [singleSelectedItem])
 
@@ -413,6 +405,9 @@ export function SharedPage() {
       access: item.ownerName || 'Shared',
       webViewLink: item.webViewLink,
       providerFileId: item.providerFileId || item.id,
+      accountEmail: item.accountEmail,
+      accountId: item.accountId,
+      thumbnailLink: item.thumbnailUrl ? `${API_URL}${item.thumbnailUrl}` : (item.thumbnailLink || null),
     }))
   }, [filteredItems])
 
@@ -428,6 +423,9 @@ export function SharedPage() {
       access: activeItem.ownerName || 'Shared',
       webViewLink: activeItem.webViewLink,
       providerFileId: activeItem.providerFileId || activeItem.id,
+      accountEmail: activeItem.accountEmail,
+      accountId: activeItem.accountId,
+      thumbnailLink: activeItem.thumbnailUrl ? `${API_URL}${activeItem.thumbnailUrl}` : (activeItem.thumbnailLink || null),
     }
   }, [activeItem])
 

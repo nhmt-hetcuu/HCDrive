@@ -79,7 +79,7 @@ function mapFile(file: BackendFile): FileItem {
     providerFileId: file.providerFileId,
     // HCDrive's signed thumbnail proxy, so previews show without a Google sign-in in this browser.
     thumbnailLink: file.thumbnailUrl ? `${API_URL}${file.thumbnailUrl}` : null,
-    webViewLink: file.webViewLink || (file.providerFileId ? `https://drive.google.com/file/d/${file.providerFileId}/view` : null),
+    webViewLink: file.webViewLink || (file.providerFileId ? (file.connectedAccount?.email ? `https://drive.google.com/file/d/${file.providerFileId}/view?authuser=${encodeURIComponent(file.connectedAccount.email)}` : `https://drive.google.com/file/d/${file.providerFileId}/view`) : null),
     starred: Boolean(file.starred),
   }
 }
@@ -778,10 +778,11 @@ export function AllFilesPage() {
   async function downloadFile(targetFile?: FileItem) {
     const file = targetFile ?? activeFile
     setContextMenu({ x: 0, y: 0, file: null })
-    if (!file?.id) return
+    const targetId = file?.id || file?.providerFileId
+    if (!targetId || !file) return
     try {
       showSnackbar(lang === 'vi' ? `Đang bắt đầu tải ${file.name}...` : `Starting download of ${file.name}...`)
-      await startDownload(`/files/${file.id}/download`, file.name, { auth: true })
+      await startDownload(`/files/${targetId}/download`, file.name, { auth: true })
     } catch (error) {
       showSnackbar(errorText(error, lang === 'vi' ? 'Tải xuống thất bại' : 'Download failed'))
     }

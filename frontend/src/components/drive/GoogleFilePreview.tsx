@@ -201,13 +201,11 @@ export function GoogleFilePreview({
     }
     if (!file) return
     try {
-      if (file.id) {
+      const targetId = file.id || file.providerFileId
+      if (targetId) {
         showSnackbar(vi ? `Đang bắt đầu tải ${file.name}...` : `Starting download of ${file.name}...`)
-        await startDownload(`/files/${file.id}/download`, file.name, { auth: true })
+        await startDownload(`/files/${targetId}/download`, file.name, { auth: true })
         return
-      }
-      if (file.providerFileId) {
-        window.open(`https://drive.google.com/uc?id=${file.providerFileId}&export=download`, '_blank')
       }
     } catch {
       showSnackbar(vi ? 'Tải xuống thất bại' : 'Download failed')

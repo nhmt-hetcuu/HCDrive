@@ -25,7 +25,49 @@ publicRouter.get('/thumbnails/:token', async (req, res, next) => {
     const fileId = verifySignedId('thumbnail', String(req.params.token))
     if (!fileId) return res.status(404).end()
     const size = Math.min(Math.max(Number(req.query.size) || 400, 64), 1600)
-    const file = await prisma.file.findFirst({ where: { id: fileId, provider: 'google_drive', connectedAccount: { status: 'connected' } }, include: { connectedAccount: true } })
+    let file = await prisma.file.findFirst({
+      where: {
+        OR: [{ id: fileId }, { providerFileId: fileId }],
+        provider: 'google_drive',
+        connectedAccount: { status: 'connected' },
+      },
+      include: { connectedAccount: true },
+    })
+    if (!file) {
+      const accounts = await prisma.connectedAccount.findMany({
+        where: { provider: 'google_drive', status: 'connected' },
+      })
+      for (const acc of accounts) {
+        try {
+          const auth = await getAuthedGoogleClient(acc)
+          const meta = await getGoogleDriveClient(auth, getAccountProxyUrl(acc)).files.get({
+            fileId,
+            fields: 'id, name, mimeType, size, thumbnailLink, trashed',
+            supportsAllDrives: true,
+          })
+          if (meta.data.id) {
+            rememberThumbnailLink(fileId, meta.data.thumbnailLink ?? null)
+            file = await prisma.file.create({
+              data: {
+                userId: acc.userId || '',
+                connectedAccountId: acc.id,
+                provider: 'google_drive',
+                providerFileId: meta.data.id,
+                name: meta.data.name || fileId,
+                mimeType: meta.data.mimeType || 'application/octet-stream',
+                sizeBytes: BigInt(meta.data.size || 0),
+                status: meta.data.trashed ? 'deleted' : 'active',
+                deletedAt: meta.data.trashed ? new Date() : null,
+              },
+              include: { connectedAccount: true },
+            }).catch(() => null)
+            if (file) break
+          }
+        } catch {
+          // try next account
+        }
+      }
+    }
     if (!file) return res.status(404).end()
     const auth = await getAuthedGoogleClient(file.connectedAccount)
     // Usually known from the folder listing; asking Drive is the fallback, skipped while rate limited.

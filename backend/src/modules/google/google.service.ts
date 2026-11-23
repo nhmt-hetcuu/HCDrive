@@ -992,6 +992,25 @@ export async function getGoogleDriveFileMetadata(
   return res.data
 }
 
+export function buildGoogleDriveWebViewLink(providerFileId: string, email?: string | null): string {
+  const base = `https://drive.google.com/file/d/${providerFileId}/view`
+  return email ? `${base}?authuser=${encodeURIComponent(email)}` : base
+}
+
+export function appendAuthUser(url: string, email?: string | null): string {
+  if (!email || !url) return url
+  try {
+    const parsed = new URL(url)
+    if (!parsed.searchParams.has('authuser')) {
+      parsed.searchParams.set('authuser', email)
+    }
+    return parsed.toString()
+  } catch {
+    const sep = url.includes('?') ? '&' : '?'
+    return `${url}${sep}authuser=${encodeURIComponent(email)}`
+  }
+}
+
 export async function listGoogleDriveSharedWithMe(
   account: ConnectedAccount,
   pageToken?: string
@@ -1024,7 +1043,7 @@ export async function listGoogleDriveSharedWithMe(
       ownerEmail: owner?.emailAddress || null,
       accountEmail: account.email,
       accountId: account.id,
-      webViewLink: f.webViewLink || (f.id ? `https://drive.google.com/file/d/${f.id}/view` : null),
+      webViewLink: appendAuthUser(f.webViewLink || (f.id ? buildGoogleDriveWebViewLink(f.id, account.email) : ''), account.email),
       webContentLink: f.webContentLink || null,
       iconLink: f.iconLink || null,
       thumbnailLink: f.thumbnailLink || null,
@@ -1067,7 +1086,7 @@ export async function listGoogleDriveSharedByMe(
       sharedWith: recipients.slice(0, 3).join(', ') + (recipients.length > 3 ? ` +${recipients.length - 3}` : ''),
       accountEmail: account.email,
       accountId: account.id,
-      webViewLink: f.webViewLink || (f.id ? `https://drive.google.com/file/d/${f.id}/view` : null),
+      webViewLink: appendAuthUser(f.webViewLink || (f.id ? buildGoogleDriveWebViewLink(f.id, account.email) : ''), account.email),
       webContentLink: f.webContentLink || null,
       iconLink: f.iconLink || null,
       thumbnailLink: f.thumbnailLink || null,

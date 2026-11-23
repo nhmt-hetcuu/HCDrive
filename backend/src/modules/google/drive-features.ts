@@ -43,9 +43,12 @@ export function conversionTargetFor(mimeType: string, fileName: string) {
 }
 
 /** Signed URL the browser can put in an <img> (see public.routes.ts). */
-export function thumbnailUrlFor(file: { id: string; provider: string; mimeType: string }) {
-  if (file.provider !== 'google_drive' || file.mimeType === GOOGLE_FOLDER_MIME || file.mimeType === GOOGLE_SHORTCUT_MIME) return null
-  return `/public/thumbnails/${signId('thumbnail', file.id)}`
+export function thumbnailUrlFor(file: { id?: string; providerFileId?: string; provider?: string; mimeType: string }) {
+  const fileId = file.id || file.providerFileId
+  if (!fileId) return null
+  const provider = file.provider ?? 'google_drive'
+  if (provider !== 'google_drive' || file.mimeType === GOOGLE_FOLDER_MIME || file.mimeType === GOOGLE_SHORTCUT_MIME) return null
+  return `/public/thumbnails/${signId('thumbnail', fileId)}`
 }
 
 function driveFor(account: ConnectedAccount) {

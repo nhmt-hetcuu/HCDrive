@@ -213,15 +213,11 @@ export function RecentPage() {
   async function handleDownloadFile(file?: FileItem) {
     const target = file || activeFile
     if (!target) return
+    const targetId = target.id || target.providerFileId
+    if (!targetId) return
     try {
-      if (target.id) {
-        showSnackbar(vi ? `Đang bắt đầu tải ${target.name}...` : `Starting download of ${target.name}...`)
-        await startDownload(`/files/${target.id}/download`, target.name, { auth: true })
-        return
-      }
-      if (target.providerFileId) {
-        window.open(`https://drive.google.com/uc?id=${target.providerFileId}&export=download`, '_blank')
-      }
+      showSnackbar(vi ? `Đang bắt đầu tải ${target.name}...` : `Starting download of ${target.name}...`)
+      await startDownload(`/files/${targetId}/download`, target.name, { auth: true })
     } catch {
       showSnackbar(vi ? 'Tải tệp thất bại' : 'Download failed')
     }
