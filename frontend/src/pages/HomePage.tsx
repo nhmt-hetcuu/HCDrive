@@ -96,6 +96,7 @@ export function HomePage() {
         const recentData = await apiFetch<{ files: any[] }>('/files/recent')
         const mapped = (recentData.files || []).map((f) => ({
           ...f,
+          thumbnailLink: f.thumbnailUrl ? `${API_URL}${f.thumbnailUrl}` : f.thumbnailLink,
           reason: 'opened' as const,
           reasonTime: f.viewedByMeTime || f.modifiedTime,
         }))

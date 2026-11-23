@@ -11,6 +11,7 @@ import {
   Star
 } from 'lucide-react'
 import type { FileItem, FolderItem } from '@/data/drive-data'
+import { API_URL } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 export function getFileVisual(mimeType = '') {
@@ -166,9 +167,10 @@ export function DriveGridView({
               const visual = getFileVisual(file.mimeType)
               const Icon = visual.icon
               const isImage = file.mimeType?.startsWith('image/')
-              // Google Drive thumbnail link
-              const thumbUrl = file.thumbnailLink
-                ? file.thumbnailLink
+              // Prefer HCDrive thumbnail proxy (works seamlessly across all connected accounts without Google sign-in)
+              const rawThumb = file.thumbnailLink || (file as any).thumbnailUrl
+              const thumbUrl = rawThumb
+                ? (rawThumb.startsWith('/') ? `${API_URL}${rawThumb}` : rawThumb)
                 : file.providerFileId
                   ? `https://drive.google.com/thumbnail?id=${file.providerFileId}&sz=w400`
                   : undefined

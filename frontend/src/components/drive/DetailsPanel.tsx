@@ -16,7 +16,7 @@ import { Button } from '@/components/ui/button'
 import type { FileItem, FolderItem } from '@/data/drive-data'
 import { getFileVisual } from '@/components/drive/DriveGridView'
 import { DriveDetailsSection } from '@/components/drive/DriveDetailsSection'
-import { formatBytes, formatDate } from '@/lib/api'
+import { formatBytes, formatDate, API_URL } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 function DetailRow({
@@ -70,8 +70,10 @@ export function DetailsPanel({
 
   const visual = file ? getFileVisual(file.mimeType) : null
   // thumbnailLink: the HCDrive thumbnail proxy URL when the page has one (works without a Google sign-in).
-  const thumbUrl = file?.thumbnailLink
-    ? `${file.thumbnailLink}${file.thumbnailLink.includes('?') ? '&' : '?'}size=600`
+  const rawThumb = file?.thumbnailLink || (file as any)?.thumbnailUrl
+  const resolvedThumb = rawThumb ? (rawThumb.startsWith('/') ? `${API_URL}${rawThumb}` : rawThumb) : undefined
+  const thumbUrl = resolvedThumb
+    ? `${resolvedThumb}${resolvedThumb.includes('?') ? '&' : '?'}size=600`
     : file?.providerFileId
       ? `https://drive.google.com/thumbnail?id=${file.providerFileId}&sz=w600`
       : undefined
@@ -194,9 +196,12 @@ export function DetailsPanel({
                 </div>
 
                 {/* Open in Google Drive Link */}
-                {file.webViewLink && (
+                {(file.webViewLink || file.providerFileId) && (
                   <a
-                    href={file.webViewLink}
+                    href={
+                      file.webViewLink ||
+                      `https://drive.google.com/file/d/${file.providerFileId}/view${file.accountEmail ? `?authuser=${encodeURIComponent(file.accountEmail)}` : ''}`
+                    }
                     target="_blank"
                     rel="noopener noreferrer"
                     className="flex items-center justify-center gap-2 w-full py-2.5 px-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-xs font-semibold text-blue-600 dark:text-blue-400 transition"

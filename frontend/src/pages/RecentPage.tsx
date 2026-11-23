@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useRef, type MouseEvent } from 'react'
 import { Clock } from 'lucide-react'
-import { apiFetch } from '@/lib/api'
+import { apiFetch, API_URL } from '@/lib/api'
 import { useLanguage } from '@/context/LanguageContext'
 import { useSnackbar } from '@/context/SnackbarContext'
 import { useDownload } from '@/context/DownloadContext'
@@ -69,8 +69,9 @@ export function RecentPage() {
         createdAt: f.viewedByMeTime || f.modifiedTime,
         accountEmail: f.accountEmail,
         accountId: f.accountId,
-        webViewLink: f.webViewLink || (f.id ? `https://drive.google.com/file/d/${f.id}/view` : null),
+        webViewLink: f.webViewLink || (f.id ? `https://drive.google.com/file/d/${f.id}/view${f.accountEmail ? `?authuser=${encodeURIComponent(f.accountEmail)}` : ''}` : null),
         providerFileId: f.id,
+        thumbnailLink: f.thumbnailUrl ? `${API_URL}${f.thumbnailUrl}` : null,
         starred: Boolean(f.starred),
       }))
       setFiles(mapped)

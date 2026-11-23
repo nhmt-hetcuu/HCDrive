@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useRef, type MouseEvent } from 'react'
 import { Star } from 'lucide-react'
-import { apiFetch, formatBytes } from '@/lib/api'
+import { apiFetch, formatBytes, API_URL } from '@/lib/api'
 import { useLanguage } from '@/context/LanguageContext'
 import { useSnackbar } from '@/context/SnackbarContext'
 import { useDownload } from '@/context/DownloadContext'
@@ -70,8 +70,9 @@ export function StarredPage() {
         accountEmail: f.accountEmail,
         accountId: f.accountId,
         accountProvider: f.provider === 's3' ? 'S3 Storage' : 'Google Drive',
-        webViewLink: f.webViewLink ?? null,
+        webViewLink: f.webViewLink ?? (f.providerFileId && f.accountEmail ? `https://drive.google.com/file/d/${f.providerFileId}/view?authuser=${encodeURIComponent(f.accountEmail)}` : null),
         providerFileId: f.provider === 'google_drive' ? f.providerFileId : undefined,
+        thumbnailLink: f.thumbnailUrl ? `${API_URL}${f.thumbnailUrl}` : null,
         folderId: f.folderId,
         folderName: f.folderName,
         starred: true,

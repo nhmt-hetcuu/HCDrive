@@ -1,4 +1,4 @@
-export type PreviewKind = 'image' | 'video' | 'document' | 'office'
+export type PreviewKind = 'image' | 'video' | 'audio' | 'document' | 'office' | 'text'
 
 const officeMimeTypes = new Set([
   'application/msword',
@@ -15,12 +15,27 @@ const googleDocumentMimeTypes = new Set([
   'application/vnd.google-apps.presentation',
 ])
 
+const textMimeTypes = new Set([
+  'text/plain',
+  'text/html',
+  'text/css',
+  'text/javascript',
+  'text/markdown',
+  'text/csv',
+  'application/json',
+  'application/xml',
+  'application/x-yaml',
+  'text/yaml',
+])
+
 export function getPreviewKind(mimeType: string | undefined): PreviewKind | null {
   if (!mimeType) return null
   if (mimeType.startsWith('image/') || mimeType === 'application/vnd.google-apps.drawing') return 'image'
   if (mimeType.startsWith('video/')) return 'video'
+  if (mimeType.startsWith('audio/')) return 'audio'
   if (mimeType === 'application/pdf' || googleDocumentMimeTypes.has(mimeType)) return 'document'
   if (officeMimeTypes.has(mimeType)) return 'office'
+  if (mimeType.startsWith('text/') || textMimeTypes.has(mimeType)) return 'text'
   return null
 }
 

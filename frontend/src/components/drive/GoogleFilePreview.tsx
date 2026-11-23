@@ -7,7 +7,8 @@ import {
   ExternalLink,
   MoreVertical,
   Share2,
-  FileText
+  FileText,
+  Music,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { getFileVisual } from '@/components/drive/DriveGridView'
@@ -125,9 +126,9 @@ export function GoogleFilePreview({
 
     setLoading(true)
     setPreviewError('')
-    const isMedia = previewKind === 'video' || (file?.mimeType?.startsWith('audio/') ?? false)
-    // Default video and audio files to HCDrive Direct player for 100% server background caching
-    setPreviewMode(isMedia ? 'stream' : 'drive')
+    const isMedia = previewKind === 'video' || previewKind === 'audio' || (file?.mimeType?.startsWith('audio/') ?? false)
+    // Default to HCDrive Direct player/viewer: bypasses Google browser cookie restrictions across multiple accounts
+    setPreviewMode('stream')
 
     apiFetch<{ path?: string; url: string }>(`/files/${targetId}/preview-token`, { method: 'POST' })
       .then((data) => {
@@ -139,6 +140,9 @@ export function GoogleFilePreview({
         if (!isMounted) return
         if (!file.providerFileId) {
           setPreviewError(err instanceof Error ? err.message : 'Failed to load preview')
+        } else {
+          // If direct stream fails, fall back to Google Drive viewer
+          setPreviewMode('drive')
         }
       })
       .finally(() => {
@@ -252,23 +256,25 @@ export function GoogleFilePreview({
             <div className="flex items-center rounded-full bg-white/10 p-0.5 text-xs text-white">
               <button
                 type="button"
-                onClick={() => setPreviewMode('drive')}
-                className={cn(
-                  'px-3 py-1.5 rounded-full transition cursor-pointer',
-                  previewMode === 'drive' ? 'bg-white/20 font-medium' : 'text-white/70 hover:text-white'
-                )}
-              >
-                Google Drive
-              </button>
-              <button
-                type="button"
                 onClick={() => setPreviewMode('stream')}
                 className={cn(
                   'px-3 py-1.5 rounded-full transition cursor-pointer',
                   previewMode === 'stream' ? 'bg-white/20 font-medium' : 'text-white/70 hover:text-white'
                 )}
+                title={vi ? 'Xem qua HCDrive (Hỗ trợ đa tài khoản, không bị hạn chế quyền)' : 'HCDrive Direct (Works across all accounts)'}
               >
                 HCDrive Direct
+              </button>
+              <button
+                type="button"
+                onClick={() => setPreviewMode('drive')}
+                className={cn(
+                  'px-3 py-1.5 rounded-full transition cursor-pointer',
+                  previewMode === 'drive' ? 'bg-white/20 font-medium' : 'text-white/70 hover:text-white'
+                )}
+                title={vi ? 'Xem bằng Google Drive (Cần đăng nhập đúng tài khoản Google)' : 'Google Drive (Requires correct Google login)'}
+              >
+                Google Drive
               </button>
             </div>
           ) : null}
@@ -299,12 +305,11 @@ export function GoogleFilePreview({
           {file.providerFileId && (
             <button
               type="button"
-              onClick={() =>
-                window.open(
-                  file.webViewLink || `https://drive.google.com/file/d/${file.providerFileId}/view`,
-                  '_blank'
-                )
-              }
+              onClick={() => {
+                const authUser = file.accountEmail ? `?authuser=${encodeURIComponent(file.accountEmail)}` : ''
+                const fallbackUrl = `https://drive.google.com/file/d/${file.providerFileId}/view${authUser}`
+                window.open(file.webViewLink || fallbackUrl, '_blank')
+              }}
               className="hidden sm:flex h-10 w-10 items-center justify-center rounded-full text-white/80 hover:text-white hover:bg-white/10 transition cursor-pointer"
               title={vi ? 'Mở trong thẻ mới' : 'Open in new tab'}
             >
@@ -366,7 +371,7 @@ export function GoogleFilePreview({
         <div className="w-full h-full flex items-center justify-center max-w-7xl max-h-[82vh]">
           {file.providerFileId && previewMode === 'drive' ? (
             <iframe
-              src={`https://drive.google.com/file/d/${file.providerFileId}/preview`}
+              src={`https://drive.google.com/file/d/${file.providerFileId}/preview${file.accountEmail ? `?authuser=${encodeURIComponent(file.accountEmail)}` : ''}`}
               title={file.name}
               className="h-full w-full rounded-xl border border-white/10 bg-white"
               allow="autoplay; fullscreen"
@@ -378,10 +383,22 @@ export function GoogleFilePreview({
             </div>
           ) : previewError ? (
             <div className="p-8 text-center text-sm text-red-400 max-w-md">
-              <p className="mb-3">{previewError}</p>
-              <Button variant="outline" size="sm" onClick={handleDownload} className="text-white border-white/30">
-                {vi ? 'Tải tệp về máy' : 'Download file'}
-              </Button>
+              <p className="mb-4 leading-relaxed">{previewError}</p>
+              <div className="flex items-center justify-center gap-2">
+                {file.providerFileId && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPreviewMode('drive')}
+                    className="text-white border-white/30 hover:bg-white/10 cursor-pointer"
+                  >
+                    {vi ? 'Thử mở bằng Google Drive' : 'Try Google Drive'}
+                  </Button>
+                )}
+                <Button variant="outline" size="sm" onClick={handleDownload} className="text-white border-white/30 cursor-pointer">
+                  {vi ? 'Tải tệp về máy' : 'Download file'}
+                </Button>
+              </div>
             </div>
           ) : previewKind === 'image' && previewUrl ? (
             <img
@@ -401,7 +418,20 @@ export function GoogleFilePreview({
                 </video>
               </div>
             </div>
-          ) : previewKind === 'document' && previewUrl ? (
+          ) : previewKind === 'audio' && previewUrl ? (
+            <div className="w-full max-w-md p-8 rounded-2xl bg-[#1e1f20]/90 backdrop-blur-md border border-white/10 shadow-2xl flex flex-col items-center gap-4 text-white">
+              <div className="h-20 w-20 rounded-2xl bg-white/10 flex items-center justify-center shadow-inner">
+                <Music className="h-10 w-10 text-emerald-400" />
+              </div>
+              <div className="text-center w-full px-2">
+                <h3 className="font-semibold text-sm truncate" title={file.name}>{file.name}</h3>
+                <p className="text-xs text-white/50 mt-1">{formatBytes(file.sizeBytes)}</p>
+              </div>
+              <audio controls className="w-full mt-2" preload="metadata">
+                <source src={previewUrl} type={file.mimeType} />
+              </audio>
+            </div>
+          ) : (previewKind === 'document' || previewKind === 'text') && previewUrl ? (
             <iframe
               src={previewUrl}
               title={file.name}
@@ -424,15 +454,27 @@ export function GoogleFilePreview({
                   ? 'Định dạng tệp này không hỗ trợ xem trực tiếp trong trình duyệt.'
                   : 'This file format cannot be displayed directly.'}
               </p>
-              <Button
-                variant="filled"
-                size="sm"
-                onClick={handleDownload}
-                className="gap-2 bg-white text-slate-900 hover:bg-white/90 rounded-full"
-              >
-                <Download className="h-4 w-4" />
-                <span>{vi ? 'Tải xuống tệp' : 'Download file'}</span>
-              </Button>
+              <div className="flex items-center justify-center gap-2">
+                {file.providerFileId && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPreviewMode('drive')}
+                    className="text-white border-white/30 hover:bg-white/10 rounded-full"
+                  >
+                    {vi ? 'Xem trên Google Drive' : 'View on Drive'}
+                  </Button>
+                )}
+                <Button
+                  variant="filled"
+                  size="sm"
+                  onClick={handleDownload}
+                  className="gap-2 bg-white text-slate-900 hover:bg-white/90 rounded-full"
+                >
+                  <Download className="h-4 w-4" />
+                  <span>{vi ? 'Tải xuống tệp' : 'Download file'}</span>
+                </Button>
+              </div>
             </div>
           )}
         </div>

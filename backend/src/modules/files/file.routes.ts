@@ -32,6 +32,11 @@ export const fileRouter = Router()
 // Google Drive calls in flight at once for batch trash/restore/delete; the Drive client retries 403 rate limits.
 const DRIVE_BATCH_CONCURRENCY = 8
 
+export function buildGoogleDriveWebViewLink(providerFileId: string, email?: string | null): string {
+  const base = `https://drive.google.com/file/d/${providerFileId}/view`
+  return email ? `${base}?authuser=${encodeURIComponent(email)}` : base
+}
+
 fileRouter.get('/preview/:token', async (req, res, next) => {
   try {
     const token = String(req.params.token)
@@ -219,7 +224,7 @@ fileRouter.get('/', async (req: AuthRequest, res, next) => {
       files: files.map((file) => ({
         ...file,
         sizeBytes: file.sizeBytes.toString(),
-        webViewLink: file.provider === 'google_drive' ? `https://drive.google.com/file/d/${file.providerFileId}/view` : null,
+        webViewLink: file.provider === 'google_drive' ? buildGoogleDriveWebViewLink(file.providerFileId, file.connectedAccount?.email) : null,
         thumbnailUrl: thumbnailUrlFor(file),
       }))
     })
@@ -608,7 +613,7 @@ fileRouter.get('/starred', async (req: AuthRequest, res, next) => {
         provider: file.provider,
         folderId: file.folderId,
         folderName: file.folder?.name ?? null,
-        webViewLink: file.provider === 'google_drive' ? `https://drive.google.com/file/d/${file.providerFileId}/view` : null,
+        webViewLink: file.provider === 'google_drive' ? buildGoogleDriveWebViewLink(file.providerFileId, file.connectedAccount.email) : null,
         starred: true,
       })),
     })
@@ -666,7 +671,7 @@ fileRouter.get('/recent', async (req: AuthRequest, res, next) => {
           viewedByMeTime: f.createdAt.toISOString(),
           accountEmail: f.connectedAccount?.email,
           accountId: f.connectedAccountId,
-          webViewLink: f.provider === 'google_drive' ? `https://drive.google.com/file/d/${f.providerFileId}/view` : null,
+          webViewLink: f.provider === 'google_drive' ? buildGoogleDriveWebViewLink(f.providerFileId, f.connectedAccount?.email) : null,
           webContentLink: null,
           isFolder: false,
         })
@@ -995,7 +1000,7 @@ fileRouter.post('/:id/preview-token', async (req: AuthRequest, res, next) => {
     return res.status(201).json({
       path,
       url: `${req.protocol}://${req.get('host')}${path}`,
-      webViewLink: file.provider === 'google_drive' ? `https://drive.google.com/file/d/${file.providerFileId}/view` : null
+      webViewLink: file.provider === 'google_drive' ? buildGoogleDriveWebViewLink(file.providerFileId, file.connectedAccount?.email) : null
     })
   } catch (error) {
     return next(error)
@@ -1008,11 +1013,14 @@ fileRouter.get('/:id/view-url', async (req: AuthRequest, res, next) => {
     const file = await resolveFileOrFromDrive(fileId, req.user!.id)
     if (!file) return res.status(404).json({ code: 'FILE_NOT_FOUND', message: 'File not found.' })
     if (file.provider === 's3') return res.json({ url: null })
+    const emailParam = file.connectedAccount?.email ? `authuser=${encodeURIComponent(file.connectedAccount.email)}` : ''
     try {
       const metadata = await getGoogleDriveFileMetadata(file.connectedAccount, file.providerFileId)
-      return res.json({ url: metadata.webViewLink ?? metadata.webContentLink ?? `https://drive.google.com/file/d/${file.providerFileId}/view` })
+      const rawUrl = metadata.webViewLink ?? metadata.webContentLink ?? `https://drive.google.com/file/d/${file.providerFileId}/view`
+      const url = emailParam && !rawUrl.includes('authuser=') ? `${rawUrl}${rawUrl.includes('?') ? '&' : '?'}${emailParam}` : rawUrl
+      return res.json({ url })
     } catch {
-      return res.json({ url: `https://drive.google.com/file/d/${file.providerFileId}/view` })
+      return res.json({ url: buildGoogleDriveWebViewLink(file.providerFileId, file.connectedAccount?.email) })
     }
   } catch (error) {
     return next(error)

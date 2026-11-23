@@ -146,9 +146,20 @@ export function getGoogleDriveClient(auth: any, proxyUrl?: string | null): drive
 }
 
 export async function getAuthedGoogleClient(account: ConnectedAccount) {
-  if (!account.accessTokenEncrypted || !account.refreshTokenEncrypted || !account.tokenExpiresAt) throw new Error('Google account tokens are missing.')
-  if (!account.providerConfigId) throw new Error('Google provider config is missing.')
-  const config = await prisma.providerConfig.findUniqueOrThrow({ where: { id: account.providerConfigId } })
+  if (!account.accessTokenEncrypted || !account.refreshTokenEncrypted || !account.tokenExpiresAt) {
+    throw new Error('Google account tokens are missing.')
+  }
+  let config: ProviderConfig | null = null
+  if (account.providerConfigId) {
+    config = await prisma.providerConfig.findUnique({ where: { id: account.providerConfigId } })
+  }
+  if (!config) {
+    config = await prisma.providerConfig.findFirst({
+      where: { provider: 'google_drive', status: 'active', OR: [{ userId: account.userId }, { userId: null }] },
+      orderBy: { createdAt: 'desc' }
+    }) ?? await getRcloneConfig()
+  }
+
   const proxyUrl = getAccountProxyUrl(account)
   const client = createOAuthClient(config, proxyUrl)
   client.setCredentials({
@@ -157,19 +168,60 @@ export async function getAuthedGoogleClient(account: ConnectedAccount) {
     expiry_date: account.tokenExpiresAt.getTime(),
   })
 
-  if (account.tokenExpiresAt.getTime() < Date.now() + 60_000) {
-    const result = await client.refreshAccessToken()
-    const credentials = result.credentials
-    if (credentials.access_token) {
-      await prisma.connectedAccount.update({
+  // Listen for automatic token rotations by googleapis client
+  client.on('tokens', (tokens) => {
+    if (tokens.access_token) {
+      prisma.connectedAccount.update({
         where: { id: account.id },
         data: {
-          accessTokenEncrypted: encryptText(credentials.access_token),
-          tokenExpiresAt: new Date(credentials.expiry_date ?? Date.now() + 3600_000),
+          accessTokenEncrypted: encryptText(tokens.access_token),
+          ...(tokens.refresh_token ? { refreshTokenEncrypted: encryptText(tokens.refresh_token) } : {}),
+          tokenExpiresAt: new Date(tokens.expiry_date ?? Date.now() + 3600_000),
+          status: 'connected',
+          lastError: null,
         },
-      })
-      client.setCredentials(credentials)
+      }).catch(() => undefined)
     }
+  })
+
+  if (account.tokenExpiresAt.getTime() < Date.now() + 60_000) {
+    return withAccountLock(`token-refresh:${account.id}`, async () => {
+      // Re-read latest account from DB in case another concurrent request already refreshed it
+      const fresh = await prisma.connectedAccount.findUnique({ where: { id: account.id } })
+      if (fresh && fresh.tokenExpiresAt && fresh.tokenExpiresAt.getTime() >= Date.now() + 60_000) {
+        client.setCredentials({
+          access_token: decryptText(fresh.accessTokenEncrypted!),
+          refresh_token: decryptText(fresh.refreshTokenEncrypted!),
+          expiry_date: fresh.tokenExpiresAt.getTime(),
+        })
+        return client
+      }
+      try {
+        const result = await client.refreshAccessToken()
+        const credentials = result.credentials
+        if (credentials.access_token) {
+          await prisma.connectedAccount.update({
+            where: { id: account.id },
+            data: {
+              accessTokenEncrypted: encryptText(credentials.access_token),
+              ...(credentials.refresh_token ? { refreshTokenEncrypted: encryptText(credentials.refresh_token) } : {}),
+              tokenExpiresAt: new Date(credentials.expiry_date ?? Date.now() + 3600_000),
+              status: 'connected',
+              lastError: null,
+            },
+          })
+          client.setCredentials(credentials)
+        }
+      } catch (err: any) {
+        const errMsg = err?.response?.data?.error_description || err?.message || 'Token refresh failed'
+        await prisma.connectedAccount.update({
+          where: { id: account.id },
+          data: { lastError: errMsg },
+        }).catch(() => undefined)
+        throw err
+      }
+      return client
+    })
   }
 
   return client
