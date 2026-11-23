@@ -1150,6 +1150,17 @@ export async function streamCachedOrFetch(
   const activeTask = activeBgDownloads.get(fileId)
   if (activeTask) {
     if (activeTask.downloadedBytes === 0) {
+      if (activeTask.contentType && !res.headersSent) {
+        res.status(rangeHeader ? 206 : 200)
+        res.setHeader('Content-Type', activeTask.contentType)
+        res.setHeader('Accept-Ranges', 'bytes')
+        res.setHeader('Cache-Control', cacheTTLMinutes <= 0 ? 'private, max-age=31536000' : `private, max-age=${Math.min(cacheTTLMinutes * 60, 86400)}`)
+        res.setHeader('Content-Disposition', formatContentDisposition(disposition, outFileName))
+        if (activeTask.totalBytes > 0) {
+          if (rangeHeader) res.setHeader('Content-Range', `bytes 0-${activeTask.totalBytes - 1}/${activeTask.totalBytes}`)
+          res.setHeader('Content-Length', activeTask.totalBytes.toString())
+        }
+      }
       activeTask.clients.add(res)
       res.on('close', () => activeTask.clients.delete(res))
       res.on('error', () => activeTask.clients.delete(res))

@@ -76,6 +76,12 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   }
 
   async function uploadSingleFileResumable(file: File, folderId: string | null, onProgress: (percent: number) => void, sessionIdToRetry?: string, targetAccountId?: string | null) {
+    // 0-byte files use standard multipart upload to avoid empty-chunk resumable session stalls
+    if (file.size === 0) {
+      await uploadSingleFileS3(file, folderId, onProgress, targetAccountId)
+      return
+    }
+
     const CHUNK_SIZE = 5 * 1024 * 1024 // 5MB chunks (must be multiple of 256KB for Google Drive)
     let sessionId = sessionIdToRetry || ''
     let startOffset = 0

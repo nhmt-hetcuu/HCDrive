@@ -91,11 +91,14 @@ export function buildMergedFolders(folders: FolderRow[]) {
   }
 
   function toMerged(key: string): FolderRow {
-    const group = groups.get(key)!
+    const group = groups.get(key)
+    if (!group || group.length === 0) {
+      throw new Error(`Group not found for key: ${key}`)
+    }
     const canonical = group[0]
     const parentKey = parentKeyOf(key)
     const updatedAt = group.reduce((latest, folder) => (folder.updatedAt > latest ? folder.updatedAt : latest), canonical.updatedAt)
-    return { ...canonical, parentId: parentKey ? groups.get(parentKey)![0].id : null, updatedAt }
+    return { ...canonical, parentId: parentKey && groups.has(parentKey) ? groups.get(parentKey)![0].id : null, updatedAt }
   }
 
   // Same order as Google Drive's default view: by name, numbers compared as numbers.
@@ -105,11 +108,11 @@ export function buildMergedFolders(folders: FolderRow[]) {
     /** Ids of every folder merged with `id` (just `[id]` when it is unknown). */
     memberIds(id: string): string[] {
       const key = keyOf(id)
-      return key === null ? [id] : groups.get(key)!.map((folder) => folder.id)
+      return key === null ? [id] : (groups.get(key)?.map((folder) => folder.id) ?? [id])
     },
     members(id: string): FolderRow[] {
       const key = keyOf(id)
-      return key === null ? [] : groups.get(key)!
+      return key === null ? [] : (groups.get(key) ?? [])
     },
     /** Merged children of a folder, or of the root when `parentId` is null. */
     childrenOf(parentId: string | null): FolderRow[] {

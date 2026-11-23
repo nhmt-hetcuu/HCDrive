@@ -208,14 +208,24 @@ export async function handleUpload(req: AuthRequest, res: ExpressResponse, next:
       return res.status(status).json({ code, message })
     }
 
-    const parseBatchMeta = (value: string) => JSON.parse(value).map((item: { fieldName: string; fileName: string; mimeType: string; sizeBytes: string | number; folderId?: string; targetAccountId?: string }) => ({
-      fieldName: item.fieldName,
-      fileName: item.fileName,
-      mimeType: item.mimeType,
-      sizeBytes: BigInt(item.sizeBytes),
-      folderId: item.folderId,
-      targetAccountId: item.targetAccountId,
-    })) as UploadMeta[]
+    const parseBatchMeta = (value: string) => {
+      try {
+        const parsed = JSON.parse(value)
+        if (!Array.isArray(parsed)) return null
+        return parsed.map((item: any) => ({
+          fieldName: String(item.fieldName || ''),
+          fileName: String(item.fileName || 'uploaded-file'),
+          mimeType: String(item.mimeType || 'application/octet-stream'),
+          sizeBytes: typeof item.sizeBytes === 'number' || typeof item.sizeBytes === 'string'
+            ? BigInt(Math.max(0, Math.floor(Number(item.sizeBytes) || 0)))
+            : 0n,
+          folderId: item.folderId ? String(item.folderId) : undefined,
+          targetAccountId: item.targetAccountId ? String(item.targetAccountId) : undefined,
+        })) as UploadMeta[]
+      } catch {
+        return null
+      }
+    }
 
     const metaForFile = (fieldName: string, info: { filename: string; mimeType: string }) => {
       if (batchMeta) {
@@ -338,7 +348,13 @@ export async function handleUpload(req: AuthRequest, res: ExpressResponse, next:
     }
 
     busboy.on('field', (name, value) => {
-      if (name === 'sizeBytes') fields.sizeBytes = BigInt(value)
+      if (name === 'sizeBytes') {
+        try {
+          fields.sizeBytes = BigInt(Math.max(0, Math.floor(Number(value) || 0)))
+        } catch {
+          fields.sizeBytes = 0n
+        }
+      }
       if (name === 'fileName') fields.fileName = value
       if (name === 'mimeType') fields.mimeType = value
       if (name === 'folderId') fields.folderId = value
