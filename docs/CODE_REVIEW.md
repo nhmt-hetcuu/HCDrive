@@ -132,6 +132,13 @@ Tất cả các lỗi logic và điểm nghẽn đã được khắc phục hoà
 | **11** | Tăng `setMaxListeners(100)` cho `redisSub` | **Đã sửa xong** | Triệt tiêu cảnh báo rò rỉ listener |
 | **12** | Thay `findFirstOrThrow` bằng `findFirst` an toàn | **Đã sửa xong** | Không ném ngoại lệ P2025 làm crash request |
 | **13** | Pub/Sub đồng bộ cấu hình Temp Cache trên cluster | **Đã sửa xong** | Cập nhật cấu hình cache tức thì cho toàn bộ workers |
+| **14** | Sửa cờ `isPermanent: options.isPermanent !== false` | **Đã sửa xong** | Tránh biến mọi tệp thường thành cache vĩnh viễn, khôi phục TTL chuẩn |
+| **15** | Sửa `ERR_CONTENT_LENGTH_MISMATCH` khi xem tệp đang tải ngầm | **Đã sửa xong** | Phục vụ HTTP 206 Partial Content chuẩn RFC 7233 theo dung lượng thực trên đĩa |
+| **16** | Bắt lỗi `fileWriteStream.on('error')` và giải phóng client | **Đã sửa xong** | Chống crash khi đầy đĩa, đóng kết nối client ngay khi tải lỗi |
+| **17** | Chạy timer dọn dẹp cache trên tiến trình Primary | **Đã sửa xong** | Dọn cache liên tục ngay cả khi worker 1 bị khởi động lại |
+| **18** | Thay `body.pipe(res)` bằng `pipeline` an toàn cho S3 | **Đã sửa xong** | Xử lý lỗi stream hai chiều, chống rò rỉ socket |
+| **19** | Dọn cache SSD ngay khi xóa vĩnh viễn tệp | **Đã sửa xong** | Thu hồi dung lượng SSD lập tức khi tệp bị xóa vĩnh viễn |
+| **20** | Tái sử dụng tệp đã cache trên SSD khi tải ZIP (batch / folder) | **Đã sửa xong** | Tiết kiệm băng thông và tránh chạm hạn ngạch Google Drive API |
 
 **Kết quả build:**
 - Backend: `npm run build` (`tsc`) thành công 100% không lỗi.

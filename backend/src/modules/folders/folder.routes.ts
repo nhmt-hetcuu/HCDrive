@@ -1,3 +1,4 @@
+import fs from 'node:fs'
 import { Router } from 'express'
 import { google } from 'googleapis'
 import { z } from 'zod'
@@ -10,6 +11,7 @@ import { createDriveClientCache, getAuthedGoogleClient, getGoogleDriveClient, en
 import { mapLimit } from '../../utils/concurrency.js'
 import { getS3ConfigForAccount, createS3Client } from '../s3/s3.service.js'
 import { googleDownloadExportMimeTypes, normalizeHeaders, withExtension } from '../files/stream-google-file.js'
+import { readCacheMeta, getCacheDataPath } from '../../services/temp-cache.service.js'
 import { createAuditLog } from '../../utils/audit.js'
 import { getAccountProxyUrl, getUndiciDispatcher } from '../../utils/proxy.js'
 import { buildMergedFolders, ensureAccountFolderPath, loadVisibleFolders, moveDriveItem } from './merged-folders.js'
@@ -260,19 +262,25 @@ folderRouter.get('/:id/download', async (req: AuthRequest, res, next) => {
           const response = await client.send(new GetObjectCommand({ Bucket: config.bucket, Key: file.providerFileId }))
           stream = response.Body as Readable
         } else {
-          const auth = await getAuthedGoogleClient(file.connectedAccount)
-          const headers = normalizeHeaders(await auth.getRequestHeaders())
-          const exportTarget = googleDownloadExportMimeTypes[file.mimeType]
-          if (exportTarget) {
-            fileName = withExtension(file.name, exportTarget.extension)
+          const cached = readCacheMeta(file.providerFileId)
+          const dataPath = getCacheDataPath(file.providerFileId)
+          if (cached && fs.existsSync(dataPath)) {
+            stream = fs.createReadStream(dataPath)
+          } else {
+            const auth = await getAuthedGoogleClient(file.connectedAccount)
+            const headers = normalizeHeaders(await auth.getRequestHeaders())
+            const exportTarget = googleDownloadExportMimeTypes[file.mimeType]
+            if (exportTarget) {
+              fileName = withExtension(file.name, exportTarget.extension)
+            }
+            const url = exportTarget
+              ? `https://www.googleapis.com/drive/v3/files/${file.providerFileId}/export?mimeType=${encodeURIComponent(exportTarget.mimeType)}`
+              : `https://www.googleapis.com/drive/v3/files/${file.providerFileId}?alt=media`
+            const proxyUrl = getAccountProxyUrl(file.connectedAccount)
+            const response = await fetch(url, { headers, dispatcher: getUndiciDispatcher(proxyUrl) } as any)
+            if (!response.ok || !response.body) continue
+            stream = Readable.fromWeb(response.body as any)
           }
-          const url = exportTarget
-            ? `https://www.googleapis.com/drive/v3/files/${file.providerFileId}/export?mimeType=${encodeURIComponent(exportTarget.mimeType)}`
-            : `https://www.googleapis.com/drive/v3/files/${file.providerFileId}?alt=media`
-          const proxyUrl = getAccountProxyUrl(file.connectedAccount)
-          const response = await fetch(url, { headers, dispatcher: getUndiciDispatcher(proxyUrl) } as any)
-          if (!response.ok || !response.body) continue
-          stream = Readable.fromWeb(response.body as any)
         }
         const relDir = file.folderId ? getRelativePath(file.folderId) : ''
         const archivePath = relDir ? `${relDir}/${fileName}` : fileName

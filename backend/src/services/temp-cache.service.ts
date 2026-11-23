@@ -42,6 +42,7 @@ export type DownloadSource = {
   sizeBytes?: number
   contentRange?: string | null
   status?: number
+  isPermanent?: boolean
 }
 
 // Default cache directory: inside persistent data folder /app/data/temp_cache or local ./data/temp_cache
@@ -912,6 +913,10 @@ function executeBackgroundDownload(
           fileWriteStream.destroy()
           rej(err)
         })
+        fileWriteStream.on('error', (err) => {
+          readable.destroy()
+          rej(err)
+        })
       })
 
       // End all client responses safely
@@ -935,6 +940,7 @@ function executeBackgroundDownload(
         }
         fs.renameSync(dlPath, finalDataPath)
 
+        const isPerm = Boolean(options.isPermanent || (source as any)?.isPermanent)
         const meta: CacheMeta = {
           fileId,
           fileName: outFileName,
@@ -943,7 +949,7 @@ function executeBackgroundDownload(
           createdAt: Date.now(),
           lastAccessedAt: Date.now(),
           completed: true,
-          isPermanent: options.isPermanent !== false,
+          isPermanent: isPerm,
         }
         writeCacheMeta(meta)
 
@@ -967,6 +973,12 @@ function executeBackgroundDownload(
     } catch (err: any) {
       try { if (fs.existsSync(dlPath)) fs.unlinkSync(dlPath) } catch {}
       console.warn(`[temp-cache] Background download error for ${outFileName}:`, err?.message || err)
+      for (const client of task.clients) {
+        if (!client.destroyed) {
+          try { client.destroy(err) } catch {}
+        }
+      }
+      task.clients.clear()
       progress.status = 'error'
       progress.error = err?.message || 'Download failed'
       notifyProgressIPC(progress)
@@ -1155,23 +1167,45 @@ export async function streamCachedOrFetch(
       try {
         const stat = fs.statSync(dlPath)
         if (stat.size > 0) {
-          res.status(rangeHeader ? 206 : 200)
-          res.setHeader('Content-Type', activeTask.contentType || 'video/mp4')
-          res.setHeader('Accept-Ranges', 'bytes')
-          res.setHeader('Cache-Control', cacheTTLMinutes <= 0 ? 'private, max-age=31536000' : `private, max-age=${Math.min(cacheTTLMinutes * 60, 86400)}`)
-          res.setHeader('Content-Disposition', formatContentDisposition(disposition, outFileName))
-          if (activeTask.totalBytes > 0) {
-            if (rangeHeader) {
-              res.setHeader('Content-Range', `bytes 0-${activeTask.totalBytes - 1}/${activeTask.totalBytes}`)
-            }
-            res.setHeader('Content-Length', activeTask.totalBytes.toString())
-          }
+          if (rangeHeader) {
+            // Client supports HTTP 206 Partial Content: serve the downloaded chunk immediately
+            // The browser will seamlessly request the subsequent range as playback advances
+            const totalSize = activeTask.totalBytes || stat.size
+            res.status(206)
+            res.setHeader('Content-Type', activeTask.contentType || 'video/mp4')
+            res.setHeader('Accept-Ranges', 'bytes')
+            res.setHeader('Cache-Control', cacheTTLMinutes <= 0 ? 'private, max-age=31536000' : `private, max-age=${Math.min(cacheTTLMinutes * 60, 86400)}`)
+            res.setHeader('Content-Disposition', formatContentDisposition(disposition, outFileName))
+            res.setHeader('Content-Range', `bytes 0-${stat.size - 1}/${totalSize}`)
+            res.setHeader('Content-Length', stat.size.toString())
 
-          const readStream = fs.createReadStream(dlPath)
-          await pipeline(readStream, res).catch(() => {
-            if (!res.destroyed) res.destroy()
-          })
-          return true
+            const readStream = fs.createReadStream(dlPath, { start: 0, end: stat.size - 1 })
+            await pipeline(readStream, res).catch(() => {
+              if (!res.destroyed) res.destroy()
+            })
+            return true
+          } else {
+            // Full stream or file download without Range: direct proxy so file is not truncated
+            const directSource = await downloadFn(rangeHeader)
+            if (directSource && directSource.stream) {
+              res.status(directSource.status || 200)
+              res.setHeader('Content-Type', directSource.contentType || activeTask.contentType || 'application/octet-stream')
+              res.setHeader('Accept-Ranges', 'bytes')
+              res.setHeader('Cache-Control', cacheTTLMinutes <= 0 ? 'private, max-age=31536000' : `private, max-age=${Math.min(cacheTTLMinutes * 60, 86400)}`)
+              res.setHeader('Content-Disposition', formatContentDisposition(disposition, outFileName))
+              if (directSource.contentRange) res.setHeader('Content-Range', directSource.contentRange)
+              if (directSource.sizeBytes) res.setHeader('Content-Length', directSource.sizeBytes.toString())
+
+              const readable = 'pipe' in (directSource.stream as any)
+                ? (directSource.stream as NodeJS.ReadableStream)
+                : Readable.fromWeb(directSource.stream as any)
+
+              await pipeline(readable, res).catch(() => {
+                if (!res.destroyed) res.destroy()
+              })
+              return true
+            }
+          }
         }
       } catch {}
     }

@@ -29,6 +29,11 @@ if (cluster.isPrimary && numWorkers > 1) {
   // Initialize SQLite WAL mode and concurrency pragmas on primary
   initDatabaseConcurrency().catch(() => undefined)
 
+  // Start background cache cleanup on primary so it never dies regardless of worker lifecycle
+  import('./services/temp-cache.service.js')
+    .then(({ startTempCacheCleanup }) => startTempCacheCleanup())
+    .catch((err) => console.warn('[cluster] Failed to initialize temp-cache cleanup on primary:', err))
+
   // Fork worker threads
   for (let i = 0; i < numWorkers; i++) {
     cluster.fork()

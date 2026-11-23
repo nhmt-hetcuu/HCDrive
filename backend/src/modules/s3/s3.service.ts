@@ -3,6 +3,7 @@ import { Upload } from '@aws-sdk/lib-storage'
 import type { ConnectedAccount, File, S3StorageConfig } from '@prisma/client'
 import type { Response } from 'express'
 import type { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import { prisma } from '../../config/prisma.js'
 import { decryptText } from '../../utils/crypto.js'
 
@@ -100,5 +101,7 @@ export async function streamS3File(file: FileWithAccount, range: string | undefi
 
   const body = response.Body as Readable | undefined
   if (!body) return res.end()
-  return body.pipe(res)
+  await pipeline(body, res).catch(() => {
+    if (!res.destroyed) res.destroy()
+  })
 }

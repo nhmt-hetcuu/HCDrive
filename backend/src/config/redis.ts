@@ -74,6 +74,10 @@ export function isRedisAvailable(): boolean {
   return isConnected && redis !== null && redis.status === 'ready'
 }
 
+export function getRedisClient(): any {
+  return redis
+}
+
 export { redis as redisClient }
 
 /**

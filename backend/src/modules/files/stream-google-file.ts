@@ -308,12 +308,12 @@ export async function streamGoogleFile(original: FileWithAccount, range: string 
         sizeBytes: cLength ? parseInt(cLength, 10) : undefined,
         contentRange: dlResponse.headers.get('content-range') || undefined,
         status: dlResponse.status,
+        isPermanent: isBypassUsed,
       }
     },
     {
       disposition: options.disposition,
       fileName: responseFileName,
-      isPermanent: isBypassUsed, // Only bypass files are permanently saved to disk; normal files follow the admin configured TTL
     }
   )
 
@@ -389,6 +389,7 @@ export async function startBackgroundCacheGoogleFile(original: FileWithAccount, 
     : `https://www.googleapis.com/drive/v3/files/${file.providerFileId}?alt=media`
 
   const cacheKey = exportTarget ? `${file.providerFileId}_export_${exportTarget.extension}` : file.providerFileId
+  let isBypassUsed = false
 
   const downloadFn = async (rangeForFetch?: string) => {
     let dlResponse = await fetch(url, {
@@ -407,6 +408,7 @@ export async function startBackgroundCacheGoogleFile(original: FileWithAccount, 
       const bypass = await attemptGoogleBypassStream(original.connectedAccount, file.providerFileId, null, rangeForFetch, file.mimeType)
       if (bypass && (bypass.status === 200 || bypass.status === 206)) {
         dlResponse = bypass
+        isBypassUsed = true
       } else {
         return null
       }
@@ -420,12 +422,13 @@ export async function startBackgroundCacheGoogleFile(original: FileWithAccount, 
       sizeBytes: cLength ? parseInt(cLength, 10) : undefined,
       contentRange: dlResponse.headers.get('content-range') || undefined,
       status: dlResponse.status,
+      isPermanent: isBypassUsed,
     }
   }
 
-  // Trigger background download to 100% completion
+  // Trigger background download to 100% completion (follows admin configured TTL unless bypass is used)
   triggerBackgroundDownload(cacheKey, responseFileName, downloadFn, {
-    isPermanent: true,
+    isPermanent: false,
     fileName: responseFileName,
     disposition: options.disposition || 'inline',
   }).catch(() => undefined)

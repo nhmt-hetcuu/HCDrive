@@ -1,3 +1,4 @@
+import fs from 'node:fs'
 import { Router } from 'express'
 import type { ConnectedAccount, File } from '@prisma/client'
 import { google } from 'googleapis'
@@ -22,7 +23,7 @@ import { mapLimit } from '../../utils/concurrency.js'
 import { ownedBy, requireOwned, type OwnedRequest } from '../../middleware/ownership.js'
 import { exportExtension, mountDriveFeatureRoutes, thumbnailUrlFor } from '../google/drive-features.js'
 import { copySingleFile } from './cross-account-copy.js'
-import { getCacheProgress } from '../../services/temp-cache.service.js'
+import { getCacheProgress, deleteCacheFile, readCacheMeta, getCacheDataPath } from '../../services/temp-cache.service.js'
 
 
 
@@ -392,6 +393,7 @@ fileRouter.delete('/batch/permanent', async (req: AuthRequest, res, next) => {
             if (!isDriveNotFound(error)) throw error
           })
         }
+        deleteCacheFile(file.providerFileId)
         deletedIds.push(file.id)
         syncedAccountIds.add(file.connectedAccountId)
       } catch (error) {
@@ -1122,19 +1124,25 @@ fileRouter.post('/batch-download', async (req: AuthRequest, res, next) => {
           const response = await client.send(new GetObjectCommand({ Bucket: config.bucket, Key: file.providerFileId }))
           stream = response.Body as Readable
         } else {
-          const auth = await getAuthedGoogleClient(file.connectedAccount)
-          const headers = normalizeHeaders(await auth.getRequestHeaders())
-          const exportTarget = googleDownloadExportMimeTypes[file.mimeType]
-          if (exportTarget) {
-            fileName = withExtension(file.name, exportTarget.extension)
+          const cached = readCacheMeta(file.providerFileId)
+          const dataPath = getCacheDataPath(file.providerFileId)
+          if (cached && fs.existsSync(dataPath)) {
+            stream = fs.createReadStream(dataPath)
+          } else {
+            const auth = await getAuthedGoogleClient(file.connectedAccount)
+            const headers = normalizeHeaders(await auth.getRequestHeaders())
+            const exportTarget = googleDownloadExportMimeTypes[file.mimeType]
+            if (exportTarget) {
+              fileName = withExtension(file.name, exportTarget.extension)
+            }
+            const url = exportTarget
+              ? `https://www.googleapis.com/drive/v3/files/${file.providerFileId}/export?mimeType=${encodeURIComponent(exportTarget.mimeType)}`
+              : `https://www.googleapis.com/drive/v3/files/${file.providerFileId}?alt=media`
+            const proxyUrl = getAccountProxyUrl(file.connectedAccount)
+            const response = await fetch(url, { headers, dispatcher: getUndiciDispatcher(proxyUrl) } as any)
+            if (!response.ok || !response.body) continue
+            stream = Readable.fromWeb(response.body as any)
           }
-          const url = exportTarget
-            ? `https://www.googleapis.com/drive/v3/files/${file.providerFileId}/export?mimeType=${encodeURIComponent(exportTarget.mimeType)}`
-            : `https://www.googleapis.com/drive/v3/files/${file.providerFileId}?alt=media`
-          const proxyUrl = getAccountProxyUrl(file.connectedAccount)
-          const response = await fetch(url, { headers, dispatcher: getUndiciDispatcher(proxyUrl) } as any)
-          if (!response.ok || !response.body) continue
-          stream = Readable.fromWeb(response.body as any)
         }
         archive.append(stream, { name: fileName })
       } catch (err) {

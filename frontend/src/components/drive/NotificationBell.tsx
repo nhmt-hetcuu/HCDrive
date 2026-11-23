@@ -249,8 +249,8 @@ function NotificationPopover({
               </p>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 max-w-[240px]">
                 {vi
-                  ? 'Tất cả tài khoản và Cookie Google Drive đang hoạt động ổn định và được duy trì tự động.'
-                  : 'All storage accounts and Google Drive cookies are healthy and active.'}
+                  ? 'Tất cả tài khoản lưu trữ đám mây đang hoạt động ổn định và được duy trì tự động.'
+                  : 'All cloud storage accounts are healthy and active.'}
               </p>
             </div>
           ) : (
