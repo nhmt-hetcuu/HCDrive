@@ -11,7 +11,7 @@ import { createDriveClientCache, isDriveNotFound, getAuthedGoogleClient, getGoog
 import { deleteS3Object, syncS3Quota, createS3Client, getS3ConfigForAccount } from '../s3/s3.service.js'
 import { streamProviderFile, startBackgroundCacheFile } from './stream-file.js'
 import { googleDownloadExportMimeTypes, normalizeHeaders, withExtension } from './stream-google-file.js'
-import { GetObjectCommand } from '@aws-sdk/client-s3'
+import { GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3'
 import { Readable } from 'node:stream'
 import { ZipArchive } from 'archiver'
 import { createAuditLog } from '../../utils/audit.js'
@@ -24,6 +24,7 @@ import { ownedBy, requireOwned, type OwnedRequest } from '../../middleware/owner
 import { exportExtension, mountDriveFeatureRoutes, thumbnailUrlFor } from '../google/drive-features.js'
 import { copySingleFile } from './cross-account-copy.js'
 import { getCacheProgress, deleteCacheFile, readCacheMeta, getCacheDataPath } from '../../services/temp-cache.service.js'
+import { grantTemporaryEdit, getTemporaryEditGrants, revokeTemporaryEdit } from '../google/temporary-permission.service.js'
 
 
 
@@ -1196,5 +1197,201 @@ mountDrivePermissionRoutes(fileRouter, async (req) => {
     account: file.connectedAccount,
     providerId: file.providerFileId,
     canManage: file.connectedAccount.userId === req.user!.id,
+  }
+})
+
+// --- Temporary Edit Permission (1h or 24h, blocked on public shared folders/files) ---
+fileRouter.get('/:id/temporary-edit-grant', async (req: AuthRequest, res, next) => {
+  try {
+    const file = await resolveFileOrFromDrive(String(req.params.id), req.user!.id)
+    if (!file) return res.status(404).json({ code: 'FILE_NOT_FOUND', message: 'Tệp không tồn tại.' })
+    if (file.provider !== 'google_drive') {
+      return res.status(400).json({ code: 'UNSUPPORTED_PROVIDER', message: 'Chỉ hỗ trợ tệp Google Drive.' })
+    }
+    const grants = await getTemporaryEditGrants(file)
+    return res.json({ grants })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+fileRouter.post('/:id/temporary-edit-grant', async (req: AuthRequest, res, next) => {
+  try {
+    const schema = z.object({
+      targetEmail: z.string().email(),
+      duration: z.enum(['1h', '24h']).default('1h'),
+    })
+    const { targetEmail, duration } = schema.parse(req.body)
+    const file = await resolveFileOrFromDrive(String(req.params.id), req.user!.id)
+    if (!file) return res.status(404).json({ code: 'FILE_NOT_FOUND', message: 'Tệp không tồn tại.' })
+    if (file.provider !== 'google_drive') {
+      return res.status(400).json({ code: 'UNSUPPORTED_PROVIDER', message: 'Chỉ hỗ trợ tệp Google Drive.' })
+    }
+
+    const result = await grantTemporaryEdit(file, req.user!.id, targetEmail, duration)
+    return res.json(result)
+  } catch (error) {
+    return next(error)
+  }
+})
+
+fileRouter.delete('/:id/temporary-edit-grant', async (req: AuthRequest, res, next) => {
+  try {
+    const schema = z.object({
+      targetEmail: z.string().email().optional(),
+      permissionId: z.string().optional(),
+    })
+    const { targetEmail, permissionId } = schema.parse(req.body || req.query)
+    const file = await resolveFileOrFromDrive(String(req.params.id), req.user!.id)
+    if (!file) return res.status(404).json({ code: 'FILE_NOT_FOUND', message: 'Tệp không tồn tại.' })
+    if (file.provider !== 'google_drive') {
+      return res.status(400).json({ code: 'UNSUPPORTED_PROVIDER', message: 'Chỉ hỗ trợ tệp Google Drive.' })
+    }
+
+    const result = await revokeTemporaryEdit(file, req.user!.id, targetEmail, permissionId)
+    return res.json(result)
+  } catch (error) {
+    return next(error)
+  }
+})
+
+// --- Direct Text / Code In-App Viewing & Editing (Without requiring Google login) ---
+fileRouter.get('/:id/text-content', async (req: AuthRequest, res, next) => {
+  try {
+    const file = await resolveFileOrFromDrive(String(req.params.id), req.user!.id)
+    if (!file) return res.status(404).json({ code: 'FILE_NOT_FOUND', message: 'Tệp không tồn tại.' })
+
+    const size = Number(file.sizeBytes || 0)
+    if (size > 10 * 1024 * 1024) {
+      return res.status(400).json({
+        code: 'FILE_TOO_LARGE',
+        message: 'Tệp vượt quá giới hạn 10MB cho chỉnh sửa văn bản trực tiếp.',
+      })
+    }
+
+    if (file.provider === 's3') {
+      const config = await getS3ConfigForAccount(file.connectedAccountId)
+      const client = createS3Client(config)
+      const response = await client.send(new GetObjectCommand({ Bucket: config.bucket, Key: file.providerFileId }))
+      const text = await (response.Body as any).transformToString('utf-8')
+      return res.json({
+        name: file.name,
+        mimeType: file.mimeType,
+        content: text,
+        isGoogleDoc: false,
+        canSaveDirectly: true,
+      })
+    }
+
+    // Google Docs proprietary document
+    if (file.mimeType === 'application/vnd.google-apps.document') {
+      const auth = await getAuthedGoogleClient(file.connectedAccount)
+      const drive = getGoogleDriveClient(auth, getAccountProxyUrl(file.connectedAccount))
+      const resDrive = await drive.files.export(
+        { fileId: file.providerFileId, mimeType: 'text/plain' },
+        { responseType: 'text' }
+      )
+      const text = typeof resDrive.data === 'string' ? resDrive.data : String(resDrive.data || '')
+      return res.json({
+        name: file.name,
+        mimeType: file.mimeType,
+        content: text,
+        isGoogleDoc: true,
+        canSaveDirectly: false,
+        message: 'Đây là tệp Google Docs. Để chỉnh sửa đầy đủ định dạng và lưu lại, bạn có thể sử dụng chức năng "Tự cấp quyền chỉnh sửa" (1h hoặc 24h).',
+      })
+    }
+
+    // Standard Google Drive file
+    const cached = readCacheMeta(file.providerFileId)
+    const dataPath = getCacheDataPath(file.providerFileId)
+    let text = ''
+    if (cached && fs.existsSync(dataPath)) {
+      text = fs.readFileSync(dataPath, 'utf-8')
+    } else {
+      const auth = await getAuthedGoogleClient(file.connectedAccount)
+      const drive = getGoogleDriveClient(auth, getAccountProxyUrl(file.connectedAccount))
+      const resDrive = await drive.files.get(
+        { fileId: file.providerFileId, alt: 'media', supportsAllDrives: true },
+        { responseType: 'text' }
+      )
+      text = typeof resDrive.data === 'string' ? resDrive.data : String(resDrive.data || '')
+    }
+
+    return res.json({
+      name: file.name,
+      mimeType: file.mimeType,
+      content: text,
+      isGoogleDoc: false,
+      canSaveDirectly: true,
+    })
+  } catch (error) {
+    return next(error)
+  }
+})
+
+fileRouter.put('/:id/text-content', async (req: AuthRequest, res, next) => {
+  try {
+    const file = await resolveFileOrFromDrive(String(req.params.id), req.user!.id)
+    if (!file) return res.status(404).json({ code: 'FILE_NOT_FOUND', message: 'Tệp không tồn tại.' })
+
+    const { content } = z.object({ content: z.string() }).parse(req.body)
+
+    if (file.mimeType === 'application/vnd.google-apps.document') {
+      return res.status(400).json({
+        code: 'GOOGLE_DOC_DIRECT_SAVE_UNSUPPORTED',
+        message: 'Tệp Google Docs độc quyền không hỗ trợ lưu dạng văn bản thô trực tiếp. Vui lòng sử dụng tính năng "Tự cấp quyền chỉnh sửa tạm thời" (1h hoặc 24h) để mở và chỉnh sửa trực tiếp trên Google Docs.',
+      })
+    }
+
+    const buffer = Buffer.from(content, 'utf-8')
+    const newSizeBytes = BigInt(buffer.length)
+
+    if (file.provider === 's3') {
+      const config = await getS3ConfigForAccount(file.connectedAccountId)
+      const client = createS3Client(config)
+      await client.send(
+        new PutObjectCommand({
+          Bucket: config.bucket,
+          Key: file.providerFileId,
+          Body: buffer,
+          ContentType: file.mimeType || 'text/plain',
+        })
+      )
+    } else {
+      const auth = await getAuthedGoogleClient(file.connectedAccount)
+      const drive = getGoogleDriveClient(auth, getAccountProxyUrl(file.connectedAccount))
+      await drive.files.update({
+        fileId: file.providerFileId,
+        media: {
+          mimeType: file.mimeType || 'text/plain',
+          body: Readable.from([buffer]),
+        },
+        supportsAllDrives: true,
+      })
+      // Clear outdated local cached file
+      deleteCacheFile(file.providerFileId)
+    }
+
+    await prisma.file.update({
+      where: { id: file.id },
+      data: {
+        sizeBytes: newSizeBytes,
+        modifiedTime: new Date(),
+      },
+    })
+
+    await createAuditLog(req.user!.id, 'FILE_TEXT_EDITED', 'file', file.id, {
+      name: file.name,
+      sizeBytes: String(newSizeBytes),
+    })
+
+    return res.json({
+      success: true,
+      sizeBytes: String(newSizeBytes),
+      message: 'Đã lưu thay đổi thành công.',
+    })
+  } catch (error) {
+    return next(error)
   }
 })

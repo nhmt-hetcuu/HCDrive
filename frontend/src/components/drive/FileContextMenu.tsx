@@ -17,8 +17,10 @@ import {
   History,
   MessageSquare,
   Lock,
+  Sparkles,
+  FileCode,
 } from 'lucide-react'
-import { isGoogleDoc, isGoogleFile, startDriveAction, type DriveAction } from '@/lib/drive-actions'
+import { isGoogleDoc, isGoogleFile, isTextEditable, startDriveAction, type DriveAction } from '@/lib/drive-actions'
 import type { FileItem } from '@/data/drive-data'
 import { useLanguage } from '@/context/LanguageContext'
 import { useMenuPosition } from '@/hooks/useMenuPosition'
@@ -130,8 +132,22 @@ export function FileContextMenu({
         style={style}
         className="w-64 sm:w-72 rounded-lg border border-slate-200/80 dark:border-slate-800 bg-white/95 dark:bg-[#1e1f20]/95 shadow-xl backdrop-blur-xl p-1.5 animate-in fade-in zoom-in-95 duration-100 select-none"
       >
-        {/* Nhóm 1: Xem trước, Mở trên Google Drive */}
+        {/* Nhóm 1: Xem trước, Chỉnh sửa, Mở trên Google Drive */}
         <MenuItem icon={Eye} label={t('action.preview', 'Xem trước')} onClick={onView} kbd="↵" />
+        {isTextEditable(file) && (
+          <MenuItem
+            icon={FileCode}
+            label={vi ? 'Chỉnh sửa văn bản trực tiếp' : 'Edit text in HCDrive'}
+            onClick={drive('text_edit')}
+          />
+        )}
+        {googleFile && (
+          <MenuItem
+            icon={Sparkles}
+            label={vi ? 'Tự cấp quyền chỉnh sửa (1h / 24h)...' : 'Temporary edit permission (1h/24h)…'}
+            onClick={drive('temporary_edit')}
+          />
+        )}
         {file.providerFileId && (
           <MenuItem
             icon={ExternalLink}

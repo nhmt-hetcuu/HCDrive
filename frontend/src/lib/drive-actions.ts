@@ -6,7 +6,7 @@ import type { FileItem } from '@/data/drive-data'
 // DriveFeatureHost (mounted once in App.tsx) opens the dialog and does the work, so pages do not
 // each need their own copy of every dialog.
 
-export type DriveAction = 'copy' | 'export' | 'shortcut' | 'versions' | 'comments' | 'lock'
+export type DriveAction = 'copy' | 'export' | 'shortcut' | 'versions' | 'comments' | 'lock' | 'temporary_edit' | 'text_edit'
 export type GoogleDocKind = 'document' | 'spreadsheet' | 'presentation' | 'form'
 
 export type DriveActionEvent =
@@ -37,6 +37,34 @@ export function isGoogleFile(file: FileItem | null | undefined) {
   if (!file?.id && !file?.providerFileId) return false
   const provider = (file.accountProvider ?? '').toLowerCase()
   return !provider.includes('s3') && file.mimeType !== 'application/vnd.google-apps.folder'
+}
+
+/** True for text, code, markdown, json, or configuration files that can be edited in HCDrive. */
+export function isTextEditable(file: FileItem | null | undefined): boolean {
+  if (!file?.id && !file?.providerFileId) return false
+  if (file.mimeType === 'application/vnd.google-apps.folder') return false
+  const mime = (file.mimeType || '').toLowerCase()
+  const name = (file.name || '').toLowerCase()
+  if (
+    mime.startsWith('text/') ||
+    mime.includes('json') ||
+    mime.includes('javascript') ||
+    mime.includes('typescript') ||
+    mime.includes('xml') ||
+    mime.includes('yaml') ||
+    mime.includes('markdown') ||
+    mime === 'application/vnd.google-apps.document'
+  ) {
+    return true
+  }
+  const textExtensions = [
+    '.txt', '.md', '.markdown', '.json', '.js', '.ts', '.jsx', '.tsx',
+    '.py', '.html', '.htm', '.css', '.scss', '.sass', '.less',
+    '.sh', '.bash', '.zsh', '.env', '.yaml', '.yml', '.xml', '.svg',
+    '.c', '.cpp', '.h', '.hpp', '.cs', '.java', '.go', '.rs', '.php',
+    '.rb', '.sql', '.csv', '.tsv', '.ini', '.conf', '.log', '.properties'
+  ]
+  return textExtensions.some((ext) => name.endsWith(ext))
 }
 
 export function isGoogleDoc(file: FileItem | null | undefined) {

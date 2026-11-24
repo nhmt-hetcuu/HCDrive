@@ -3,6 +3,8 @@ import { useLocation } from 'react-router-dom'
 import { CheckCircle2, Download, Lock, MessageSquare, RotateCcw, Trash2, Unlock } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DummyModal } from '@/components/drive/DummyModal'
+import { TemporaryEditModal } from '@/components/drive/TemporaryEditModal'
+import { TextEditorModal } from '@/components/drive/TextEditorModal'
 import { apiFetch, formatBytes, formatDate } from '@/lib/api'
 import { useLanguage } from '@/context/LanguageContext'
 import { useSnackbar } from '@/context/SnackbarContext'
@@ -109,6 +111,8 @@ export function DriveFeatureHost() {
   const close = () => setDialog(null)
   if (!dialog) return null
   const { file } = dialog
+  if (dialog.action === 'temporary_edit') return <TemporaryEditModal open={true} file={file} onClose={close} />
+  if (dialog.action === 'text_edit') return <TextEditorModal open={true} file={file} onClose={close} />
   const props = { file, vi, onClose: close, notify: showSnackbar }
   if (dialog.action === 'export') return <ExportDialog {...props} />
   if (dialog.action === 'shortcut') return <ShortcutDialog {...props} />

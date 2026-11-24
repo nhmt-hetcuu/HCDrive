@@ -9,6 +9,8 @@ import {
   Share2,
   FileText,
   Music,
+  Sparkles,
+  Edit3,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { getFileVisual } from '@/components/drive/DriveGridView'
@@ -19,6 +21,7 @@ import { useLanguage } from '@/context/LanguageContext'
 import { useSnackbar } from '@/context/SnackbarContext'
 import { useDownload } from '@/context/DownloadContext'
 import { StreamProgressBar } from '@/components/StreamProgressBar'
+import { isGoogleFile, isTextEditable, startDriveAction } from '@/lib/drive-actions'
 import type { FileItem } from '@/data/drive-data'
 import { cn } from '@/lib/utils'
 
@@ -277,6 +280,38 @@ export function GoogleFilePreview({
             </div>
           ) : null}
 
+          {/* Direct Text Edit in HCDrive */}
+          {isTextEditable(file) && (
+            <button
+              type="button"
+              onClick={() => {
+                onClose()
+                startDriveAction({ action: 'text_edit', file })
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white text-xs font-medium transition cursor-pointer"
+              title={vi ? 'Chỉnh sửa văn bản trực tiếp trong HCDrive (Không cần đăng nhập Google)' : 'Edit text in HCDrive (No Google login required)'}
+            >
+              <Edit3 className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">{vi ? 'Chỉnh sửa' : 'Edit'}</span>
+            </button>
+          )}
+
+          {/* Temporary Edit Permission (1h/24h) for Google files */}
+          {isGoogleFile(file) && (
+            <button
+              type="button"
+              onClick={() => {
+                onClose()
+                startDriveAction({ action: 'temporary_edit', file })
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-blue-600/80 hover:bg-blue-600 text-white text-xs font-medium transition cursor-pointer"
+              title={vi ? 'Tự cấp quyền chỉnh sửa Google Drive trong 1h hoặc 24h' : 'Grant temporary Google edit permission (1h/24h)'}
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">{vi ? 'Cấp quyền sửa' : 'Grant Edit'}</span>
+            </button>
+          )}
+
           {/* Share */}
           {onShare ? (
             <button
@@ -328,9 +363,37 @@ export function GoogleFilePreview({
 
             {moreMenuOpen && (
               <div
-                className="absolute right-0 top-full mt-1.5 w-52 rounded-2xl bg-[#1e1f20] border border-white/10 py-1.5 shadow-2xl text-xs text-white z-20"
+                className="absolute right-0 top-full mt-1.5 w-60 rounded-2xl bg-[#1e1f20] border border-white/10 py-1.5 shadow-2xl text-xs text-white z-20"
                 onClick={(e) => e.stopPropagation()}
               >
+                {isTextEditable(file) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMoreMenuOpen(false)
+                      onClose()
+                      startDriveAction({ action: 'text_edit', file })
+                    }}
+                    className="w-full text-left px-4 py-2 hover:bg-white/10 flex items-center gap-2 cursor-pointer"
+                  >
+                    <Edit3 className="h-3.5 w-3.5 text-blue-400" />
+                    <span>{vi ? 'Chỉnh sửa văn bản trực tiếp' : 'Edit text directly'}</span>
+                  </button>
+                )}
+                {isGoogleFile(file) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMoreMenuOpen(false)
+                      onClose()
+                      startDriveAction({ action: 'temporary_edit', file })
+                    }}
+                    className="w-full text-left px-4 py-2 hover:bg-white/10 flex items-center gap-2 cursor-pointer"
+                  >
+                    <Sparkles className="h-3.5 w-3.5 text-amber-400" />
+                    <span>{vi ? 'Tự cấp quyền chỉnh sửa (1h/24h)' : 'Grant edit access (1h/24h)'}</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={handleCopyLink}

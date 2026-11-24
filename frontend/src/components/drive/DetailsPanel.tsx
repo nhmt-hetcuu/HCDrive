@@ -10,7 +10,9 @@ import {
   Share2,
   Tag,
   Users,
-  X
+  X,
+  Sparkles,
+  Edit3,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import type { FileItem, FolderItem } from '@/data/drive-data'
@@ -18,6 +20,7 @@ import { getFileVisual } from '@/components/drive/DriveGridView'
 import { DriveDetailsSection } from '@/components/drive/DriveDetailsSection'
 import { formatBytes, formatDate, API_URL } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { isGoogleFile, isTextEditable, startDriveAction } from '@/lib/drive-actions'
 
 function DetailRow({
   icon: Icon,
@@ -181,6 +184,32 @@ export function DetailsPanel({
                   <p className="text-xs text-slate-500">
                     {file.accountEmail ? `${vi ? 'Chủ sở hữu: ' : 'Owner: '}${file.accountEmail}` : file.access}
                   </p>
+                  {(isTextEditable(file) || isGoogleFile(file)) && (
+                    <div className="flex flex-wrap gap-2 pt-1 border-t border-slate-200/60 dark:border-slate-800/80">
+                      {isTextEditable(file) && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 gap-1 text-[11px] flex-1"
+                          onClick={() => startDriveAction({ action: 'text_edit', file })}
+                        >
+                          <Edit3 className="h-3 w-3 text-blue-500" />
+                          <span>{vi ? 'Sửa văn bản' : 'Edit Text'}</span>
+                        </Button>
+                      )}
+                      {isGoogleFile(file) && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 gap-1 text-[11px] flex-1 border-blue-200 dark:border-blue-900/60 bg-blue-50/50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300"
+                          onClick={() => startDriveAction({ action: 'temporary_edit', file })}
+                        >
+                          <Sparkles className="h-3 w-3 text-blue-600 dark:text-blue-400" />
+                          <span>{vi ? 'Cấp quyền sửa' : 'Grant Edit'}</span>
+                        </Button>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* File Properties Table */}
